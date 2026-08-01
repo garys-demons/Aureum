@@ -1,0 +1,5 @@
+# Risk engine config — populated in Phase 6.
+# Placeholder so the config/ directory and loader conventions exist from Phase 1 onward.
+max_position_size: null
+max_daily_loss: null
+kill_switch_enabled: false

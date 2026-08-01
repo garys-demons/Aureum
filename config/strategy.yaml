@@ -1,0 +1,3 @@
+# Strategy config — populated from Phase 5 onward (baseline inventory-aware MM).
+strategy_name: null
+parameters: {}

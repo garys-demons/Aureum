@@ -1,0 +1,16 @@
+# Exchange connection config — Phase 1 (Data Spine)
+exchange: binance
+environment: testnet
+
+binance:
+  rest_base_url: "https://testnet.binance.vision/api"
+  ws_base_url: "wss://testnet.binance.vision/ws"
+  symbols:
+    - "BTCUSDT"
+  api_key_env: "BINANCE_TESTNET_API_KEY"
+  api_secret_env: "BINANCE_TESTNET_API_SECRET"
+
+reconnect:
+  initial_backoff_seconds: 1
+  max_backoff_seconds: 60
+  backoff_multiplier: 2
