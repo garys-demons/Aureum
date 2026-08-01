@@ -50,3 +50,11 @@ everything above it. Keep it that way as the codebase grows.
 - [x] `ExchangeAdapter` interface stub
 - [ ] `BinanceAdapter.stream_market_data` (Day 3 — Hansika)
 - [ ] `BinanceAdapter.fetch_historical_candles` (Day 4 — Gauri)
+
+## Database
+
+Default: shared Timescale Cloud instance for the team (ask Samarth for the connection string).
+Set it in your `.env` as `DATABASE_URL`.
+
+Alternative: run Postgres locally via Docker —
+`docker compose -f infra/docker/docker-compose.yml up -d`
