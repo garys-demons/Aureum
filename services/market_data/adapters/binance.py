@@ -4,6 +4,7 @@ BinanceAdapter — concrete ExchangeAdapter for Binance Spot Testnet.
 Day 3: stream_market_data (WebSocket client, reconnect/backoff) — Hansika
 Day 4: fetch_historical_candles (REST downloader) — Gauri
 """
+import asyncio
 import json
 from typing import AsyncIterator, Any
 
@@ -15,6 +16,12 @@ from services.market_data.adapters.base import ExchangeAdapter
 logger = structlog.get_logger()
 
 BINANCE_TESTNET_WS_BASE = "wss://stream.testnet.binance.vision/ws"
+
+# Backoff parameters (TRD §6.3) — single source of truth in config/exchange.yaml
+# in production; hardcoded here for Day 3 baseline, wire to config later.
+INITIAL_BACKOFF_SECONDS = 1
+MAX_BACKOFF_SECONDS = 60
+BACKOFF_MULTIPLIER = 2
 
 
 class BinanceAdapter(ExchangeAdapter):
@@ -37,23 +44,38 @@ class BinanceAdapter(ExchangeAdapter):
     async def stream_market_data(self, symbols: list[str]) -> AsyncIterator[dict[str, Any]]:
         """
         Connect to a combined ticker stream for the given symbols and yield
-        raw parsed JSON dicts as they arrive. Parsing into Pydantic models
-        happens one layer up (per base.py's docstring).
+        raw parsed JSON dicts as they arrive. Automatically reconnects with
+        exponential backoff on disconnect (TRD §6.3).
         """
         stream_names = "/".join(f"{s.lower()}@ticker" for s in symbols)
         url = f"wss://stream.testnet.binance.vision/stream?streams={stream_names}"
 
-        logger.info("subscribing_to_streams", symbols=symbols, url=url)
-        async with websockets.connect(url) as ws:
-            self._ws = ws
-            logger.info("stream_connected", symbols=symbols)
-            async for raw_message in ws:
-                try:
-                    parsed = json.loads(raw_message)
-                    yield parsed
-                except json.JSONDecodeError:
-                    logger.warning("invalid_json_received", raw=raw_message)
-                    continue
+        backoff = INITIAL_BACKOFF_SECONDS
+
+        while True:
+            try:
+                logger.info("subscribing_to_streams", symbols=symbols, url=url)
+                async with websockets.connect(url) as ws:
+                    self._ws = ws
+                    logger.info("stream_connected", symbols=symbols)
+                    backoff = INITIAL_BACKOFF_SECONDS  # reset backoff after a successful connect
+
+                    async for raw_message in ws:
+                        try:
+                            parsed = json.loads(raw_message)
+                            yield parsed
+                        except json.JSONDecodeError:
+                            logger.warning("invalid_json_received", raw=raw_message)
+                            continue
+
+            except (websockets.exceptions.ConnectionClosed, OSError) as e:
+                logger.warning(
+                    "stream_disconnected_retrying",
+                    error=str(e),
+                    backoff_seconds=backoff,
+                )
+                await asyncio.sleep(backoff)
+                backoff = min(backoff * BACKOFF_MULTIPLIER, MAX_BACKOFF_SECONDS)
 
     async def fetch_historical_candles(
         self, symbol: str, interval: str, start_time: int, end_time: int

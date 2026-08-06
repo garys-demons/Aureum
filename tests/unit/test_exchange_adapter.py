@@ -8,8 +8,9 @@ def test_binance_adapter_instantiates():
 
 
 @pytest.mark.asyncio
-async def test_connect_not_yet_implemented():
-    # Day 1: interface exists, implementation lands Day 3.
+async def test_connect_succeeds():
+    """Day 3: connect() now actually connects to Binance Testnet."""
     adapter = BinanceAdapter(config={})
-    with pytest.raises(NotImplementedError):
-        await adapter.connect()
+    await adapter.connect()
+    assert adapter._ws is not None
+    await adapter.disconnect()
