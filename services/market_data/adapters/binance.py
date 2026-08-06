@@ -41,13 +41,20 @@ class BinanceAdapter(ExchangeAdapter):
             await self._ws.close()
             logger.info("disconnected_from_binance")
 
-    async def stream_market_data(self, symbols: list[str]) -> AsyncIterator[dict[str, Any]]:
+    async def stream_market_data(self, symbols: list[str]):
         """
-        Connect to a combined ticker stream for the given symbols and yield
-        raw parsed JSON dicts as they arrive. Automatically reconnects with
-        exponential backoff on disconnect (TRD §6.3).
+        Connect to combined ticker + trade streams for the given symbols and
+        yield parsed, deduplicated MarketEvent models (TickerEvent, TradeEvent).
+        Automatically reconnects with exponential backoff on disconnect (TRD §6.3).
         """
-        stream_names = "/".join(f"{s.lower()}@ticker" for s in symbols)
+        from services.market_data.parsers import parse_ticker_event, parse_trade_event
+        from services.market_data.dedup import TradeDeduplicator
+
+        dedup = TradeDeduplicator()
+
+        stream_names = "/".join(
+            f"{s.lower()}@ticker/{s.lower()}@trade" for s in symbols
+        )
         url = f"wss://stream.testnet.binance.vision/stream?streams={stream_names}"
 
         backoff = INITIAL_BACKOFF_SECONDS
@@ -58,14 +65,31 @@ class BinanceAdapter(ExchangeAdapter):
                 async with websockets.connect(url) as ws:
                     self._ws = ws
                     logger.info("stream_connected", symbols=symbols)
-                    backoff = INITIAL_BACKOFF_SECONDS  # reset backoff after a successful connect
+                    backoff = INITIAL_BACKOFF_SECONDS
 
                     async for raw_message in ws:
                         try:
-                            parsed = json.loads(raw_message)
-                            yield parsed
+                            raw = json.loads(raw_message)
                         except json.JSONDecodeError:
                             logger.warning("invalid_json_received", raw=raw_message)
+                            continue
+
+                        stream_name = raw.get("stream", "")
+
+                        try:
+                            if stream_name.endswith("@ticker"):
+                                yield parse_ticker_event(raw)
+
+                            elif stream_name.endswith("@trade"):
+                                trade = parse_trade_event(raw)
+                                if dedup.is_duplicate(trade):
+                                    logger.debug("duplicate_trade_dropped", trade_id=trade.trade_id)
+                                    continue
+                                dedup.mark_seen(trade)
+                                yield trade
+
+                        except Exception as e:
+                            logger.error("failed_to_parse_message", error=str(e), raw=raw)
                             continue
 
             except (websockets.exceptions.ConnectionClosed, OSError) as e:
@@ -76,7 +100,6 @@ class BinanceAdapter(ExchangeAdapter):
                 )
                 await asyncio.sleep(backoff)
                 backoff = min(backoff * BACKOFF_MULTIPLIER, MAX_BACKOFF_SECONDS)
-
     async def fetch_historical_candles(
         self, symbol: str, interval: str, start_time: int, end_time: int
     ) -> list[dict[str, Any]]:

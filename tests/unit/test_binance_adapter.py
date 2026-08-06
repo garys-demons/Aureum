@@ -1,12 +1,14 @@
+
 """Tests for BinanceAdapter — includes a real-network check against Binance Testnet."""
 import pytest
 
 from services.market_data.adapters.binance import BinanceAdapter
+from services.market_data.models import TickerEvent, TradeEvent
 
 
 @pytest.mark.asyncio
-async def test_stream_market_data_receives_real_events():
-    """Connects to real Binance Testnet and confirms at least one valid event arrives.
+async def test_stream_market_data_yields_parsed_models():
+    """Connects to real Binance Testnet and confirms parsed model instances arrive.
 
     This hits the real network — if it ever becomes slow/flaky in CI, mark
     it with @pytest.mark.skip and revisit; for Phase 1 solo dev, keeping it
@@ -17,7 +19,10 @@ async def test_stream_market_data_receives_real_events():
 
     async for event in adapter.stream_market_data(["BTCUSDT"]):
         received.append(event)
-        break
+        if len(received) >= 3:
+            break
 
-    assert len(received) == 1
-    assert received[0]["data"]["s"] == "BTCUSDT"
+    assert len(received) == 3
+    for event in received:
+        assert isinstance(event, (TickerEvent, TradeEvent))
+        assert event.symbol == "BTCUSDT"
