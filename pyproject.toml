@@ -1,7 +1,7 @@
 [project]
-name = "project-compass"
+name = "Aureum"
 version = "0.1.0"
-description = "Project Compass — event-driven quant research & trading platform"
+description = "Aureum — event-driven quant research & trading platform"
 requires-python = ">=3.11"
 dependencies = [
     "pydantic>=2.7",
