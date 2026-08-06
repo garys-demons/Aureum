@@ -8,6 +8,9 @@ from services.market_data.models import Candle
     
 from services.market_data.parsers import parse_order_book_snapshot
 from services.market_data.models import OrderBookSnapshot
+from services.market_data.parsers import parse_order_book_delta
+from services.market_data.models import OrderBookDelta
+
 
 
 
@@ -152,3 +155,28 @@ def test_parse_order_book_snapshot_returns_snapshot():
     assert snapshot.last_update_id == 376909
     assert len(snapshot.bids) == 2
     assert snapshot.bids[0].price == 64733.13
+    
+
+
+def sample_raw_delta():
+    return {
+        "stream": "btcusdt@depth",
+        "data": {
+            "e": "depthUpdate",
+            "E": 1786035795004,
+            "s": "BTCUSDT",
+            "U": 157,
+            "u": 160,
+            "b": [["64750.08", "1.5"]],
+            "a": [["64750.09", "2.0"]],
+        },
+    }
+
+
+def test_parse_order_book_delta_returns_delta():
+    raw = sample_raw_delta()
+    delta = parse_order_book_delta(raw)
+
+    assert isinstance(delta, OrderBookDelta)
+    assert delta.first_update_id == 157
+    assert delta.final_update_id == 160

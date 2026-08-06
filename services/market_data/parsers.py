@@ -7,6 +7,8 @@ from services.market_data.models import TradeEvent
 from services.market_data.models import Candle
 from services.market_data.models import OrderBookSnapshot, PriceLevel, SnapshotSource
 import time
+from services.market_data.models import OrderBookDelta
+
 
 
 def parse_ticker_event(raw: dict) -> TickerEvent:
@@ -114,4 +116,29 @@ def parse_order_book_snapshot(raw: dict, symbol: str) -> OrderBookSnapshot:
         asks=asks,
         snapshot_time=now_ms,
         source=SnapshotSource.REST_FULL,
+    )
+    
+
+
+def parse_order_book_delta(raw: dict) -> OrderBookDelta:
+    """
+    Convert a raw Binance combined-stream depth update into an OrderBookDelta.
+
+    Expected raw shape:
+        {"stream": "btcusdt@depth", "data": {...depth fields...}}
+    """
+    data = raw["data"]
+    bids = [PriceLevel(price=float(p), quantity=float(q)) for p, q in data["b"]]
+    asks = [PriceLevel(price=float(p), quantity=float(q)) for p, q in data["a"]]
+
+    return OrderBookDelta(
+        event_type="depth_update",
+        exchange="binance",
+        symbol=data["s"],
+        event_time=data["E"],
+        received_time=int(time.time() * 1000),
+        first_update_id=data["U"],
+        final_update_id=data["u"],
+        bids=bids,
+        asks=asks,
     )
