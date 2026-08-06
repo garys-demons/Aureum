@@ -5,6 +5,7 @@ internal Pydantic models (MarketEvent subclasses).
 from services.market_data.models import TickerEvent
 from services.market_data.models import TradeEvent
 from services.market_data.models import Candle
+from services.market_data.models import OrderBookSnapshot, PriceLevel, SnapshotSource
 import time
 
 
@@ -83,4 +84,34 @@ def parse_candle_event(raw: dict) -> Candle:
         close=float(k["c"]),
         volume=float(k["v"]),
         is_closed=k["x"],
+    )
+    
+
+
+
+def parse_order_book_snapshot(raw: dict, symbol: str) -> OrderBookSnapshot:
+    """
+    Convert a raw Binance REST /api/v3/depth response into an OrderBookSnapshot.
+
+    Expected raw shape:
+        {"lastUpdateId": 376446, "bids": [["64750.08", "15.05"], ...], "asks": [...]}
+
+    Note: Binance's REST depth response doesn't include the symbol — it's
+    implied by what you requested — so we pass it in explicitly.
+    """
+    bids = [PriceLevel(price=float(p), quantity=float(q)) for p, q in raw["bids"]]
+    asks = [PriceLevel(price=float(p), quantity=float(q)) for p, q in raw["asks"]]
+    now_ms = int(time.time() * 1000)
+
+    return OrderBookSnapshot(
+        event_type="depth_snapshot",
+        exchange="binance",
+        symbol=symbol,
+        event_time=now_ms,
+        received_time=now_ms,
+        last_update_id=raw["lastUpdateId"],
+        bids=bids,
+        asks=asks,
+        snapshot_time=now_ms,
+        source=SnapshotSource.REST_FULL,
     )

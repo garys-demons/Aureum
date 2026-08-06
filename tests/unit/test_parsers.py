@@ -5,6 +5,9 @@ from services.market_data.parsers import parse_trade_event
 from services.market_data.models import TradeEvent
 from services.market_data.parsers import parse_candle_event
 from services.market_data.models import Candle
+    
+from services.market_data.parsers import parse_order_book_snapshot
+from services.market_data.models import OrderBookSnapshot
 
 
 
@@ -131,3 +134,21 @@ def test_parse_candle_event_converts_types_correctly():
 
     assert candle.open == 64800.0
     assert candle.close == 64823.99
+
+
+def sample_raw_snapshot():
+    return {
+        "lastUpdateId": 376909,
+        "bids": [["64733.13", "14.77361"], ["64733.12", "0.00326"]],
+        "asks": [["64733.14", "30.5753"], ["64733.15", "0.00192"]],
+    }
+
+
+def test_parse_order_book_snapshot_returns_snapshot():
+    raw = sample_raw_snapshot()
+    snapshot = parse_order_book_snapshot(raw, symbol="BTCUSDT")
+
+    assert isinstance(snapshot, OrderBookSnapshot)
+    assert snapshot.last_update_id == 376909
+    assert len(snapshot.bids) == 2
+    assert snapshot.bids[0].price == 64733.13
