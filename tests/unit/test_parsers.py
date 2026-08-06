@@ -1,6 +1,11 @@
 """Unit tests for parsers.py — uses fake/sample data, no real network needed."""
 from services.market_data.parsers import parse_ticker_event
 from services.market_data.models import TickerEvent
+from services.market_data.parsers import parse_trade_event
+from services.market_data.models import TradeEvent
+from services.market_data.parsers import parse_candle_event
+from services.market_data.models import Candle
+
 
 
 def sample_raw_ticker_message():
@@ -46,3 +51,83 @@ def test_parse_ticker_event_preserves_event_time():
     ticker = parse_ticker_event(raw)
 
     assert ticker.event_time == 1786035795004
+    
+
+
+
+def sample_raw_trade_message():
+    """A realistic fake Binance combined-stream trade message."""
+    return {
+        "stream": "btcusdt@trade",
+        "data": {
+            "e": "trade",
+            "E": 1786035795004,
+            "s": "BTCUSDT",
+            "t": 12345,
+            "p": "64823.99000000",
+            "q": "0.01000000",
+            "b": 88,
+            "a": 50,
+            "T": 1786035794999,
+            "m": True,
+        },
+    }
+
+
+def test_parse_trade_event_returns_trade_event():
+    raw = sample_raw_trade_message()
+    trade = parse_trade_event(raw)
+
+    assert isinstance(trade, TradeEvent)
+    assert trade.symbol == "BTCUSDT"
+    assert trade.trade_id == 12345
+
+
+def test_parse_trade_event_converts_types_correctly():
+    raw = sample_raw_trade_message()
+    trade = parse_trade_event(raw)
+
+    assert trade.price == 64823.99
+    assert trade.buyer_maker is True
+    
+
+
+def sample_raw_candle_message():
+    """A realistic fake Binance combined-stream kline message."""
+    return {
+        "stream": "btcusdt@kline_1m",
+        "data": {
+            "e": "kline",
+            "E": 1786035795004,
+            "s": "BTCUSDT",
+            "k": {
+                "t": 1786035780000,
+                "T": 1786035839999,
+                "s": "BTCUSDT",
+                "i": "1m",
+                "o": "64800.00000000",
+                "c": "64823.99000000",
+                "h": "64850.00000000",
+                "l": "64790.00000000",
+                "v": "12.50000000",
+                "x": False,
+            },
+        },
+    }
+
+
+def test_parse_candle_event_returns_candle():
+    raw = sample_raw_candle_message()
+    candle = parse_candle_event(raw)
+
+    assert isinstance(candle, Candle)
+    assert candle.interval == "1m"
+    assert candle.is_closed is False
+
+
+def test_parse_candle_event_converts_types_correctly():
+    raw = sample_raw_candle_message()
+    candle = parse_candle_event(raw)
+
+    assert candle.open == 64800.0
+    assert candle.close == 64823.99
