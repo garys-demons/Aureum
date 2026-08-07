@@ -30,6 +30,13 @@ async def session():
 
 
 async def test_record_event_round_trips(session):
+    # Uses event_type="custom" (not a real Hansika market-data type) so
+    # this test stays about generic persistence behavior, not coupled to
+    # her schema — payload validation for real event types is covered
+    # separately in test_event_validation.py.
+    row = await repository.record_event(
+        session,
+        event_type="custom",
     # event_type="trade" matches Hansika's real MarketEvent.event_type
     # value (services/market_data/models.py), not a guessed label.
     row = await repository.record_event(
@@ -44,7 +51,7 @@ async def test_record_event_round_trips(session):
 
 async def test_get_recent_filters_by_category(session):
     await repository.record_event(
-        session, event_type="trade_event", source="market_data", payload={}
+        session, event_type="custom", source="market_data", payload={}
     )
     await repository.record_decision(
         session, event_type="strategy_signal", source="ai_reasoning", payload={}
