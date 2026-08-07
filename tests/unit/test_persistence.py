@@ -37,6 +37,11 @@ async def test_record_event_round_trips(session):
     row = await repository.record_event(
         session,
         event_type="custom",
+    # event_type="trade" matches Hansika's real MarketEvent.event_type
+    # value (services/market_data/models.py), not a guessed label.
+    row = await repository.record_event(
+        session,
+        event_type="trade",
         source="market_data",
         payload={"symbol": "BTCUSDT", "price": "65000.5"},
     )
