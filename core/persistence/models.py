@@ -52,8 +52,12 @@ class AuditLog(Base):
 
     category: Mapped[AuditCategory] = mapped_column(Enum(AuditCategory), nullable=False)
 
-    # e.g. "trade_event", "order_book_delta", "strategy_signal",
-    # "order_placed", "sequence_gap" — free-form but indexed, since this
+    # For EVENT-category rows, this should match Hansika's actual
+    # MarketEvent.event_type values from services/market_data/models.py:
+    # "trade", "depth", "kline", "ticker" (short, lowercase — confirmed
+    # against her real code, not guessed). For DECISION/EXECUTION/ANOMALY
+    # rows, this is our own free-form label, e.g. "strategy_signal",
+    # "order_placed", "sequence_gap" — indexed either way, since this
     # is the field you'll filter on most when debugging.
     event_type: Mapped[str] = mapped_column(String(100), nullable=False)
 
