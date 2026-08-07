@@ -1,0 +1,90 @@
+.app-shell {
+  display: flex;
+  flex-direction: column;
+  min-height: 100vh;
+}
+
+.navbar {
+  display: flex;
+  align-items: center;
+  gap: 2rem;
+  padding: 0.75rem 1.5rem;
+  border-bottom: 1px solid #2a2a2a;
+}
+
+.navbar-brand {
+  font-weight: 700;
+  font-size: 1.1rem;
+}
+
+.navbar-links {
+  display: flex;
+  gap: 1.25rem;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.navbar-links a {
+  text-decoration: none;
+  opacity: 0.7;
+}
+
+.navbar-links a.active {
+  opacity: 1;
+  font-weight: 600;
+}
+
+.app-content {
+  flex: 1;
+  padding: 1.5rem;
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+th, td {
+  text-align: left;
+  padding: 0.5rem 0.75rem;
+  border-bottom: 1px solid #2a2a2a;
+}
+
+.anomaly-list {
+  list-style: none;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.anomaly {
+  padding: 0.75rem;
+  border-left: 3px solid #888;
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.anomaly--warning { border-left-color: #e0a800; }
+.anomaly--critical { border-left-color: #d9534f; }
+
+.anomaly-time {
+  display: block;
+  font-size: 0.8rem;
+  opacity: 0.6;
+}
+
+.error {
+  color: #d9534f;
+}
+
+.empty-note {
+  opacity: 0.6;
+  font-style: italic;
+  padding: 1rem 0;
+}
+code {
+  font-size: 0.85rem;
+  opacity: 0.85;
+}
