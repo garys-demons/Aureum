@@ -12,3 +12,4 @@ data/processed/*
 !data/processed/.gitkeep
 .DS_Store
 check_db.py 
+clear_audit.py 
