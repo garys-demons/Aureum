@@ -7,7 +7,7 @@ from typing import Any
 import httpx
 import structlog
 
-from services.market_data.models import OrderBookSnapshot, OrderBookDelta
+from services.market_data.models import OrderBookSnapshot, OrderBookDelta, PriceLevel
 from services.market_data.parsers import parse_order_book_snapshot, parse_order_book_delta
 
 logger = structlog.get_logger()
@@ -65,3 +65,95 @@ def reconcile(snapshot: OrderBookSnapshot, buffered_deltas: list[OrderBookDelta]
 
     logger.info("reconciliation_successful", num_deltas_applied=len(ordered))
     return ordered
+
+class OrderBook:
+    """
+    Maintains local bid/ask state for one symbol.
+
+    Built from a REST snapshot, then updated by applying deltas in
+    contiguous order. Any gap raises — the caller must re-snapshot and
+    re-reconcile rather than continuing with a book that has silently
+    missed updates (TRD §6.1 step 6).
+
+    Binance semantics: a price level with quantity 0 means "remove this
+    level", not "there is zero quantity here".
+    """
+
+    def __init__(self, symbol: str):
+        self.symbol = symbol
+        self.bids: dict[float, float] = {}
+        self.asks: dict[float, float] = {}
+        self.last_update_id: int | None = None
+        self.is_live: bool = False
+
+    @classmethod
+    def from_snapshot(cls, snapshot: OrderBookSnapshot) -> "OrderBook":
+        book = cls(snapshot.symbol)
+        book.bids = {lvl.price: lvl.quantity for lvl in snapshot.bids if lvl.quantity > 0}
+        book.asks = {lvl.price: lvl.quantity for lvl in snapshot.asks if lvl.quantity > 0}
+        book.last_update_id = snapshot.last_update_id
+        return book
+
+    def apply(self, delta: OrderBookDelta) -> None:
+        """
+        Apply one delta. Raises ValueError on a sequence gap.
+
+        The first delta after a snapshot is allowed to straddle
+        last_update_id (that's what reconcile() selected it for);
+        every delta after that must be exactly contiguous.
+        """
+        if self.last_update_id is None:
+            raise ValueError("Cannot apply a delta before a snapshot has been loaded")
+
+        if self.is_live:
+            if delta.first_update_id != self.last_update_id + 1:
+                raise ValueError(
+                    f"Sequence gap on {self.symbol}: expected first_update_id="
+                    f"{self.last_update_id + 1}, got {delta.first_update_id}"
+                )
+        else:
+            # Bridging delta from reconcile() — must span last_update_id + 1.
+            if not (delta.first_update_id <= self.last_update_id + 1 <= delta.final_update_id):
+                raise ValueError(
+                    f"First delta does not bridge snapshot on {self.symbol}: "
+                    f"snapshot last_update_id={self.last_update_id}, "
+                    f"delta covers {delta.first_update_id}-{delta.final_update_id}"
+                )
+
+        self._apply_levels(self.bids, delta.bids)
+        self._apply_levels(self.asks, delta.asks)
+        self.last_update_id = delta.final_update_id
+
+    @staticmethod
+    def _apply_levels(side: dict[float, float], updates: list[PriceLevel]) -> None:
+        for lvl in updates:
+            if lvl.quantity == 0:
+                side.pop(lvl.price, None)
+            else:
+                side[lvl.price] = lvl.quantity
+
+    def mark_live(self) -> None:
+        """Called once reconciliation has completed successfully."""
+        self.is_live = True
+        logger.info("order_book_live", symbol=self.symbol, last_update_id=self.last_update_id)
+
+    def best_bid(self) -> tuple[float, float] | None:
+        if not self.bids:
+            return None
+        price = max(self.bids)
+        return price, self.bids[price]
+
+    def best_ask(self) -> tuple[float, float] | None:
+        if not self.asks:
+            return None
+        price = min(self.asks)
+        return price, self.asks[price]
+
+    def spread(self) -> float | None:
+        bid, ask = self.best_bid(), self.best_ask()
+        if bid is None or ask is None:
+            return None
+        return ask[0] - bid[0]
+
+    def depth(self) -> tuple[int, int]:
+        return len(self.bids), len(self.asks)
