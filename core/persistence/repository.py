@@ -37,6 +37,56 @@ EVENT_TYPE_MODEL_MAP: dict[str, type] = {
     "depth_update": OrderBookDelta,
 }
 
+def _validate_event_payload(event_type: str, source: str, payload: dict) -> None:
+    """Shared validation used by both record_event() and stage_event()."""
+    model_cls = EVENT_TYPE_MODEL_MAP.get(event_type)
+    if model_cls is None:
+        return
+    try:
+        model_cls(**payload)
+    except ValidationError as e:
+        log.error(
+            "invalid_event_payload_rejected",
+            event_type=event_type,
+            source=source,
+            error=str(e),
+        )
+        raise ValueError(
+            f"payload for event_type={event_type!r} failed validation "
+            f"against {model_cls.__name__}: {e}"
+        ) from e
+
+
+def stage_event(
+    session: AsyncSession,
+    *,
+    event_type: str,
+    source: str,
+    payload: dict,
+    occurred_at: datetime | None = None,
+) -> AuditLog:
+    """
+    Validate and queue an event for writing, WITHOUT committing.
+
+    Use this for high-throughput ingestion where the caller commits in
+    batches (see services/market_data/runner.py). Committing per event
+    costs a full DB round-trip each time, which cannot keep up with a
+    live market data stream.
+
+    Note: no session.refresh() here either — refresh is a second
+    round-trip just to populate row.id, which batch callers don't need.
+    """
+    _validate_event_payload(event_type, source, payload)
+    row = AuditLog(
+        category=AuditCategory.EVENT,
+        event_type=event_type,
+        source=source,
+        payload=payload,
+        occurred_at=occurred_at or datetime.now(timezone.utc),
+    )
+    session.add(row)
+    return row
+
 
 async def record(
     session: AsyncSession,
