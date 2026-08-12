@@ -123,3 +123,15 @@ def test_best_bid_ask_on_empty_book():
     assert book.best_bid() is None
     assert book.best_ask() is None
     assert book.spread() is None
+
+def test_gap_within_reconciled_batch_is_rejected():
+    """
+    Regression: apply() used to check is_live, which isn't set until the
+    whole reconciled batch is applied — so deltas 2..n were checked with
+    the bridging rule instead of the contiguity rule, and a gap inside
+    the batch could slip through.
+    """
+    book = OrderBook.from_snapshot(make_snapshot(last_update_id=100))
+    book.apply(make_delta(98, 103))          # bridging delta, fine
+    with pytest.raises(ValueError, match="Sequence gap"):
+        book.apply(make_delta(110, 115))     # gap: 104-109 missing
