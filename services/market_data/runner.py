@@ -150,7 +150,17 @@ async def _consume(event_source, stream_name: str):
             # One stream failing must not take the other down (FR-12).
             log.error("consumer_failed", stream=stream_name, error=str(e), exc_info=True)
         finally:
-            await _flush(session, pending_rows, "shutdown", stream_name)
+            # The task may already be cancelled here, in which case a bare
+            # `await session.commit()` is interrupted immediately and leaves
+            # the session broken (PendingRollbackError). shield() lets the
+            # final flush complete before cancellation takes effect.
+            try:
+                await asyncio.shield(
+                    _flush(session, pending_rows, "shutdown", stream_name)
+                )
+            except asyncio.CancelledError:
+                log.warning("shutdown_flush_interrupted", stream=stream_name)
+                _write_fallback_batch(pending_rows)
             log.info("consumer_stopped", stream=stream_name)
 
 
