@@ -2,7 +2,7 @@
 # Day 1 setup: venv + deps + spin up Postgres/TimescaleDB
 set -e
 
-python -m venv .venv
+python3 -m venv .venv
 source .venv/bin/activate
 pip install --upgrade pip
 pip install -e ".[dev]"
