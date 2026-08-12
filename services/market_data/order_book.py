@@ -8,8 +8,7 @@ import httpx
 import structlog
 
 from services.market_data.models import OrderBookSnapshot, OrderBookDelta, PriceLevel
-from services.market_data.parsers import parse_order_book_snapshot, parse_order_book_delta
-
+from services.market_data.parsers import parse_order_book_snapshot
 logger = structlog.get_logger()
 
 BINANCE_TESTNET_REST_BASE = "https://testnet.binance.vision"
@@ -40,6 +39,11 @@ def reconcile(snapshot: OrderBookSnapshot, buffered_deltas: list[OrderBookDelta]
     """
     # Step 4: discard deltas already reflected in the snapshot
     usable = [d for d in buffered_deltas if d.final_update_id > snapshot.last_update_id]
+
+    # Deltas arrive in order over a single WebSocket (TCP guarantees it), so
+    # buffer order == sequence order. Sorting defensively costs nothing and
+    # keeps the contiguity check below meaningful if that ever stops holding.
+    usable.sort(key=lambda d: d.first_update_id)
 
     if not usable:
         raise ValueError("No usable deltas after filtering — buffer window was too short, re-fetch snapshot")
@@ -85,6 +89,7 @@ class OrderBook:
         self.asks: dict[float, float] = {}
         self.last_update_id: int | None = None
         self.is_live: bool = False
+        self._any_applied: bool = False
 
     @classmethod
     def from_snapshot(cls, snapshot: OrderBookSnapshot) -> "OrderBook":
@@ -98,14 +103,18 @@ class OrderBook:
         """
         Apply one delta. Raises ValueError on a sequence gap.
 
-        The first delta after a snapshot is allowed to straddle
-        last_update_id (that's what reconcile() selected it for);
-        every delta after that must be exactly contiguous.
+        The FIRST delta applied after a snapshot is allowed to straddle
+        last_update_id (that's what reconcile() selected it for). Every
+        delta after that must be exactly contiguous — including the rest
+        of the batch reconcile() returned, which is why this tracks
+        _any_applied rather than is_live (is_live isn't set until the
+        whole batch is done, so relying on it would apply the bridging
+        rule to every delta in the batch).
         """
         if self.last_update_id is None:
             raise ValueError("Cannot apply a delta before a snapshot has been loaded")
 
-        if self.is_live:
+        if self._any_applied:
             if delta.first_update_id != self.last_update_id + 1:
                 raise ValueError(
                     f"Sequence gap on {self.symbol}: expected first_update_id="
@@ -123,6 +132,7 @@ class OrderBook:
         self._apply_levels(self.bids, delta.bids)
         self._apply_levels(self.asks, delta.asks)
         self.last_update_id = delta.final_update_id
+        self._any_applied = True
 
     @staticmethod
     def _apply_levels(side: dict[float, float], updates: list[PriceLevel]) -> None:

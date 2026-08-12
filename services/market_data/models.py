@@ -39,11 +39,19 @@ class TradeEvent(MarketEvent):
 
 
 class SnapshotSource(str, Enum):
-    """Distinguishes a fresh REST snapshot from one reconstructed after reconciliation."""
+    """
+    Distinguishes a fresh REST snapshot from one reconstructed after
+    reconciliation.
+
+    NOTE: only REST_FULL is currently produced. RECONCILED is specified in
+    Backend_Schema §6 but nothing emits it yet — OrderBook maintains state
+    in memory and never serialises itself back to an OrderBookSnapshot.
+    Reserved for when the book needs to be persisted or served to the
+    dashboard.
+    """
 
     REST_FULL = "rest_full"
     RECONCILED = "reconciled"
-
 
 class OrderBookSnapshot(MarketEvent):
     """A full point-in-time picture of the order book (bids + asks)."""
