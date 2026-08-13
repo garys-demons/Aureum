@@ -122,6 +122,18 @@ async def _consume(event_source, stream_name: str):
     async with AsyncSessionLocal() as session:
         try:
             async for event in event_source:
+                # Candles arrive as a stream of updates per bar — every
+                # trade within the interval triggers one, with is_closed
+                # only True on the final update (FR-6). Persisting every
+                # in-progress update would flood the audit trail with
+                # near-duplicate rows for no real benefit once the bar
+                # closes with the final OHLCV values, so only closed bars
+                # get saved. Ticker/trade/depth events have no is_closed
+                # attribute at all, so getattr(..., True) is a no-op for
+                # them — this only actually filters candles.
+                if not getattr(event, "is_closed", True):
+                    continue
+
                 occurred_at = datetime.fromtimestamp(
                     event.event_time / 1000, tz=timezone.utc
                 )

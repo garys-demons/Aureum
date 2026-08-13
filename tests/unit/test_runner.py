@@ -22,7 +22,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 import services.market_data.runner as runner_module
 from core.persistence.models import AuditCategory, Base
 from core.persistence.repository import get_recent
-from services.market_data.models import TradeEvent
+from services.market_data.models import Candle, TradeEvent
 
 
 def make_trade(trade_id: int, price: float = 65000.5) -> TradeEvent:
@@ -114,6 +114,74 @@ async def test_remaining_events_flushed_on_stream_end(test_session_factory):
     events = [make_trade(1), make_trade(2)]
 
     await _run_with_fake_data(events, test_session_factory, batch_size=1000)
+
+    async with test_session_factory() as session:
+        rows = await get_recent(session, category=AuditCategory.EVENT)
+    assert len(rows) == 2
+
+
+def make_candle(is_closed: bool, close: float = 65100.0) -> Candle:
+    """A real, valid Candle — same shape parse_candle_event() actually produces."""
+    return Candle(
+        event_type="kline", exchange="binance", symbol="BTCUSDT",
+        event_time=1_700_000_000_000, received_time=1_700_000_000_050,
+        interval="1m", open_time=1_700_000_000_000, close_time=1_700_000_060_000,
+        open=65000.0, high=65150.0, low=64950.0, close=close, volume=12.5,
+        is_closed=is_closed,
+    )
+
+
+async def test_closed_candle_gets_persisted(test_session_factory):
+    """FR-6: a completed bar (is_closed=True) should be saved."""
+    events = [make_candle(is_closed=True)]
+
+    await _run_with_fake_data(events, test_session_factory)
+
+    async with test_session_factory() as session:
+        rows = await get_recent(session, category=AuditCategory.EVENT)
+    assert len(rows) == 1
+    assert rows[0].payload["is_closed"] is True
+
+
+async def test_in_progress_candle_is_not_persisted(test_session_factory):
+    """
+    FR-6's is_closed handling: an in-progress bar update (is_closed=False)
+    should be skipped, not saved — Binance sends one of these on every
+    trade within the interval, and persisting all of them would flood
+    the audit trail with near-duplicate rows.
+    """
+    events = [make_candle(is_closed=False), make_candle(is_closed=False)]
+
+    await _run_with_fake_data(events, test_session_factory)
+
+    async with test_session_factory() as session:
+        rows = await get_recent(session, category=AuditCategory.EVENT)
+    assert len(rows) == 0
+
+
+async def test_mixed_open_and_closed_candles_only_persists_closed(test_session_factory):
+    """A realistic sequence: several in-progress updates, then one final
+    closed update — only the closed one should land in the audit trail."""
+    events = [
+        make_candle(is_closed=False, close=65050.0),
+        make_candle(is_closed=False, close=65080.0),
+        make_candle(is_closed=True, close=65100.0),
+    ]
+
+    await _run_with_fake_data(events, test_session_factory)
+
+    async with test_session_factory() as session:
+        rows = await get_recent(session, category=AuditCategory.EVENT)
+    assert len(rows) == 1
+    assert rows[0].payload["close"] == 65100.0
+
+
+async def test_trade_events_unaffected_by_is_closed_filter(test_session_factory):
+    """Sanity check: TradeEvent has no is_closed attribute at all, so the
+    filter must not accidentally drop non-candle events."""
+    events = [make_trade(1), make_trade(2)]
+
+    await _run_with_fake_data(events, test_session_factory)
 
     async with test_session_factory() as session:
         rows = await get_recent(session, category=AuditCategory.EVENT)
