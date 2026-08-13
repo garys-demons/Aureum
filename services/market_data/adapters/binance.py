@@ -52,13 +52,13 @@ class BinanceAdapter(ExchangeAdapter):
         yield parsed, deduplicated MarketEvent models (TickerEvent, TradeEvent).
         Automatically reconnects with exponential backoff on disconnect (TRD §6.3).
         """
-        from services.market_data.parsers import parse_ticker_event, parse_trade_event
+        from services.market_data.parsers import parse_candle_event, parse_ticker_event, parse_trade_event
         from services.market_data.dedup import TradeDeduplicator
 
         dedup = TradeDeduplicator()
 
         stream_names = "/".join(
-            f"{s.lower()}@ticker/{s.lower()}@trade" for s in symbols
+            f"{s.lower()}@ticker/{s.lower()}@trade/{s.lower()}@kline_1m" for s in symbols
         )
         url = f"wss://stream.testnet.binance.vision/stream?streams={stream_names}"
 
@@ -92,6 +92,17 @@ class BinanceAdapter(ExchangeAdapter):
                                     continue
                                 dedup.mark_seen(trade)
                                 yield trade
+
+                            elif stream_name.endswith("@kline_1m"):
+                                # Binance sends an update on every trade within
+                                # the current candle (is_closed=False), then one
+                                # final update when the bar completes
+                                # (is_closed=True). We yield every update here —
+                                # the adapter's job is to report what's actually
+                                # happening, not decide what's worth keeping.
+                                # Whether to persist in-progress bars is a
+                                # downstream (runner.py) decision (FR-6).
+                                yield parse_candle_event(raw)
 
                         except Exception as e:
                             logger.error("failed_to_parse_message", error=str(e), raw=raw)
