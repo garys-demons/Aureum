@@ -1,272 +1,119 @@
 # Implementation Plan
 
-## Project
-
-Project Compass – Live Market Data Collection Module
-
-Version: 1.0
-
-Author: Hansika Saini
-
-Sprint: Phase 1 – Data Collection
-
-Status: Draft
+## Aureum – Live Market Data Collection Module
+**Version:** 2.0 (revised post-audit)
+**Author:** Hansika Saini
+**Sprint:** Phase 1 – Data Collection
+**Status:** Approved for implementation
 
 ---
 
-# 1. Purpose
-
-The purpose of this implementation plan is to define the development roadmap for the Live Market Data Collection Module. The plan outlines the phases, milestones, deliverables, dependencies, and testing strategy required to successfully implement a reliable real-time market data pipeline.
-
----
-
-# 2. Objectives
-
-The implementation aims to achieve the following objectives:
-
-- Establish a persistent WebSocket connection with Binance Spot Testnet.
-- Collect live market data in real time.
-- Validate all incoming market events.
-- Convert exchange-specific JSON messages into standardized internal models.
-- Ensure automatic recovery from connection failures.
-- Deliver reliable market data to downstream services.
+## 1. Purpose
+Development roadmap for the Live Market Data Collection Module — phases, milestones, deliverables, dependencies, and testing strategy for a reliable real-time market data pipeline.
 
 ---
 
-# 3. Development Phases
-
-## Phase 1 – Research and Planning
-
-### Objectives
-
-- Study Binance Spot WebSocket API.
-- Understand supported market streams.
-- Review JSON message structures.
-- Identify required event models.
-
-### Deliverables
-
-- API research completed
-- Message formats documented
-- Development environment ready
-
-Status: Completed
+## 2. Objectives
+Same as PRD v2.0 §2 — persistent connection, bounded-latency event collection, validation, standardization, reconnection **without state corruption or duplication**, reliable downstream delivery.
 
 ---
 
-## Phase 2 – WebSocket Infrastructure
+## 3. Development Phases
 
-### Objectives
+> **Note on ordering:** phase order matches the team's sprint plan (schemas before WS client). The v1.0 plan had WebSocket Infrastructure before Event Models, which meant building a client before the data shapes it needs to construct existed.
 
-- Implement Binance WebSocket client.
-- Establish persistent connection.
-- Subscribe to required market streams.
-- Verify successful message reception.
+**Phase 1 — Research and Planning**
+Study Binance WebSocket API, market streams, JSON structures (including the depth-snapshot REST endpoint needed for order-book reconciliation — TRD §6.1). Prepare dev environment.
 
-### Deliverables
+**Phase 2 — Event Model Development**
+Develop standardized Pydantic models per Backend Schema v2.0 (includes composite keys and explicit inheritance). Write model-level unit tests **as they're built**, not deferred.
 
-- Working WebSocket connection
-- Stream subscription
-- Initial live message reception
+**Phase 3 — WebSocket Infrastructure**
+Implement the Binance WebSocket client, persistent connection, subscription, verify live message reception against the Phase 2 models.
 
-Status: In Progress
+**Phase 4 — Data Validation & Deduplication**
+Validate incoming JSON, reject malformed messages (FR-7), implement dedup layer (TRD §7), structured logging (TRD §11, including the "never log secrets" rule).
 
----
+**Phase 5 — Reliability & Reconciliation**
+Write the integration test for "reconnect mid-delta-stream → reconciliation → consistent book state" as an executable spec first. Then implement:
+- Per-stream failure detection (not monolithic)
+- Exponential backoff (per `config/exchange.yaml`)
+- Order-book reconciliation procedure (TRD §6.1)
+- Verify the pre-written test now passes.
 
-## Phase 3 – Event Model Development
+**Phase 6 — Remaining Test Coverage**
+Fill in remaining unit/integration/failure tests not already covered incrementally (see TRD §12).
 
-### Objectives
-
-Create standardized Pydantic models for all supported market events.
-
-Models
-
-- MarketEvent
-- TradeEvent
-- OrderBookSnapshot
-- OrderBookDelta
-- Candle
-- TickerEvent
-
-### Deliverables
-
-- Validated Pydantic models
-- Schema documentation
-- Unit tests
-
-Status: Planned
+**Phase 7 — Integration**
+Integrate with persistence, dashboard, and downstream consumers via the Forwarding Contract (App Flow v2.0 §3).
 
 ---
 
-## Phase 4 – Data Validation
+## 4. Milestones
 
-### Objectives
-
-- Validate incoming JSON messages.
-- Reject malformed data.
-- Ensure correct data types.
-- Standardize exchange messages.
-
-### Deliverables
-
-- Validation layer
-- Error handling
-- Logging
-
-Status: Planned
+| Milestone | Expected Outcome | Status |
+|---|---|---|
+| Research Completed | Binance API, including depth-snapshot endpoint, understood | ☑ |
+| Event Models Completed | All schemas implemented + unit tested | ☑ |
+| WebSocket Connected | Stable live connection across streams | ☑ |
+| Validation & Dedup Completed | Incoming data verified; duplicates dropped | ☑ |
+| Reliability Completed | Reconnection + reconciliation implemented and verified live | ☑ |
+| Remaining Tests Completed | Full test suite passing | ◐ |
+| Integration Completed | End-to-end data flow to persistence | ☑ |
 
 ---
 
-## Phase 5 – Reliability and Recovery
-
-### Objectives
-
-- Detect connection failures.
-- Implement automatic reconnection.
-- Restore subscriptions.
-- Resume streaming without manual intervention.
-
-### Deliverables
-
-- Reconnect mechanism
-- Retry policy
-- Connection monitoring
-
-Status: Planned
+## 5. Dependencies
+Binance Spot Testnet availability · stable internet · Python 3.12+ · Pydantic · Pytest/pytest-asyncio · Aureum repository · shared Timescale Cloud DB · `config/exchange.yaml`.
 
 ---
 
-## Phase 6 – Testing
-
-### Objectives
-
-Perform comprehensive testing of the market data module.
-
-Testing includes
-
-- Unit Tests
-- Integration Tests
-- Validation Tests
-- Connection Tests
-- Reconnection Tests
-
-### Deliverables
-
-- Passing test suite
-- Test reports
-
-Status: Planned
+## 6. Risks
+| Risk | Mitigation |
+|---|---|
+| Network interruption | Per-stream automatic reconnect |
+| Exchange downtime | Retry with exponential backoff |
+| Invalid JSON | Validation layer |
+| API changes | Adapter abstraction + loud failure on unrecognized shape (FR-13) |
+| High message volume | Bounded dedup cache, batched DB writes |
+| **Order book corruption on reconnect** | Reconciliation procedure (TRD §6.1), verified live |
+| **Silent duplicates** | Explicit dedup keys (TRD §7), verified over 9,559 real rows |
 
 ---
 
-## Phase 7 – Integration
-
-### Objectives
-
-Integrate the Live Market Data Collection Module with downstream project components.
-
-Target Modules
-
-- Trading Module
-- AI Reasoning Module
-- Dashboard
-- Analytics
-- Data Storage
-
-### Deliverables
-
-- Successful event forwarding
-- End-to-end verification
-
-Status: Planned
+## 7. Success Criteria
+Same as PRD v2.0 §11 — sustained 1-hour live run with zero unhandled crashes, order book consistency verified across a forced reconnect, zero duplicate events downstream, all FRs pass acceptance criteria.
 
 ---
 
-# 4. Milestones
+## 8. Completion Checklist
 
-| Milestone | Expected Outcome |
-|------------|------------------|
-| Research Completed | Binance API understood |
-| WebSocket Connected | Live connection established |
-| Event Models Completed | All schemas implemented |
-| Validation Completed | Incoming messages verified |
-| Reliability Completed | Automatic reconnection working |
-| Testing Completed | Test suite passing |
-| Integration Completed | Data flowing through system |
-
----
-
-# 5. Dependencies
-
-The implementation depends on the following:
-
-- Binance Spot Testnet availability
-- Stable internet connection
-- Python runtime
-- Pydantic library
-- Pytest framework
-- Project Compass repository
-- Shared project configuration
-
----
-
-# 6. Risks
-
-| Risk | Impact | Mitigation |
-|------|--------|------------|
-| Network interruption | High | Automatic reconnect |
-| Exchange downtime | High | Retry connection |
-| Invalid JSON | Medium | Validation layer |
-| API changes | Medium | Adapter abstraction |
-| High message volume | Medium | Efficient event processing |
-
----
-
-# 7. Success Criteria
-
-The implementation will be considered successful when:
-
-- WebSocket connection remains stable.
-- Live market events are received continuously.
-- All incoming messages are successfully validated.
-- Event models are generated correctly.
-- Automatic reconnection works reliably.
-- Unit and integration tests pass.
-- Validated events are available to downstream modules.
-
----
-
-# 8. Future Enhancements
-
-Future improvements may include:
-
-- Multi-exchange support
-- Historical replay mode
-- Kafka-based event streaming
-- Advanced monitoring dashboard
-- Performance metrics collection
-- Support for additional market event types
-
----
-
-# 9. Completion Checklist
+**Legend:** `☐` Not started · `◐` In progress · `☑` Done
 
 | Task | Status |
-|--------|--------|
-| Binance API Research | ☐ |
-| WebSocket Client | ☐ |
-| MarketEvent Model | ☐ |
-| TradeEvent Model | ☐ |
-| OrderBookSnapshot Model | ☐ |
-| OrderBookDelta Model | ☐ |
-| Candle Model | ☐ |
-| TickerEvent Model | ☐ |
-| Data Validation | ☐ |
-| Reconnection Logic | ☐ |
-| Unit Tests | ☐ |
-| Integration Tests | ☐ |
-| Documentation | ☐ |
+|---|---|
+| Binance API Research (incl. depth snapshot endpoint) | ☑ |
+| MarketEvent / TradeEvent / TickerEvent Models | ☑ |
+| OrderBookSnapshot / OrderBookDelta Models | ☑ |
+| Candle Model | ☑ |
+| WebSocket Client (ticker + trade) | ☑ |
+| WebSocket Client (depth / order book) | ☑ |
+| WebSocket Client (kline / candles) | ☐ |
+| Data Validation | ☑ |
+| Deduplication Layer | ☑ |
+| Reconnection + Reconciliation Logic | ☑ |
+| Per-stream independence (FR-12) | ☑ |
+| Unit Tests | ☑ |
+| Integration Tests (automated) | ☐ |
+| Failure Tests (automated) | ☐ |
+| Sustained 1-hour run | ☑ |
+| Forced-reconnect verification | ☑ |
+| Documentation | ☑ *(this revision)* |
 
 ---
 
-# End of Document
+## 9. Future Enhancements
+Multi-exchange support · historical replay mode · Kafka-based event streaming · advanced monitoring dashboard · performance metrics collection · additional market event types.
+
+---
+*End of Document*

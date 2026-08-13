@@ -1,441 +1,156 @@
-# Application Flow Document
+# Application Flow
 
-## Project
-
-Project Compass – Live Market Data Collection Module
-
-Version: 1.0
-
-Author: Hansika Saini
-
-Sprint: Phase 1 – Data Collection
-
-Status: Draft
+## Aureum – Live Market Data Collection Module
+**Version:** 2.0 (revised post-audit)
 
 ---
 
-# 1. Purpose
+## 1. Cold Start Flow (initial connection)
 
-This document describes the complete execution flow of the Live Market Data Collection Module. It explains how the application establishes a connection with the Binance Spot Testnet exchange, receives real-time market data, validates incoming messages, converts them into standardized internal models, and forwards them to downstream services.
-
----
-
-# 2. High-Level Application Flow
-
+```
 Application Start
-        │
-        ▼
-Load Configuration Files
-        │
-        ▼
-Initialize Market Data Module
-        │
-        ▼
-Create Binance Adapter
-        │
-        ▼
-Connect to Binance WebSocket
-        │
-        ▼
-Connection Successful?
-      /      \
-    Yes       No
-     │         │
-     │    Retry Connection
-     │         │
-     └─────────┘
-        │
-        ▼
-Subscribe to Required Streams
-        │
-        ▼
-Receive Live JSON Messages
-        │
-        ▼
-Determine Event Type
-        │
-        ▼
-Validate Incoming Data
-        │
-        ▼
-Create Pydantic Event Model
-        │
-        ▼
-Forward Validated Event
-        │
-        ▼
-Wait For Next Message
-        │
-        ▼
-Repeat Until Application Stops
-
----
-
-# 3. Detailed Flow
-
-## Step 1 – Application Startup
-
-The application starts and initializes all required project components. The market data service is prepared for execution.
-
-Output
-
-Market Data Module initialized.
-
----
-
-## Step 2 – Load Configuration
-
-The application loads configuration files containing exchange settings, WebSocket endpoints, symbols, and runtime parameters.
-
-Examples
-
-- Exchange configuration
-- Trading symbols
-- WebSocket URL
-- Retry settings
-
-Output
-
-Configuration successfully loaded.
-
----
-
-## Step 3 – Initialize Binance Adapter
-
-The Binance Adapter is created.
-
-Its responsibilities include:
-
-- Managing the WebSocket connection
-- Receiving live market data
-- Handling reconnection
-- Parsing exchange messages
-
-Output
-
-Adapter ready.
-
----
-
-## Step 4 – Establish WebSocket Connection
-
-The adapter attempts to establish a persistent WebSocket connection with Binance Spot Testnet.
-
-Possible Outcomes
-
-Success
-
-Proceed to subscription.
-
-Failure
-
-Retry connection using exponential backoff.
-
-Output
-
-Connected to exchange.
-
----
-
-## Step 5 – Subscribe to Market Streams
-
-Once connected, the adapter subscribes to all required live market streams.
-
-Subscribed Streams
-
-- Trade Stream
-- Order Book Stream
-- Ticker Stream
-- Candle Stream
-
-Output
-
-Subscriptions successful.
-
----
-
-## Step 6 – Receive Live Messages
-
-The exchange continuously sends market updates.
-
-Incoming messages are received in JSON format.
-
-Examples
-
-- Trade execution
-- Price updates
-- Order book updates
-- Candle updates
-
-Output
-
-Raw JSON message received.
-
----
-
-## Step 7 – Identify Event Type
-
-Each incoming message is inspected to determine its event type.
-
-Supported Events
-
-- TradeEvent
-- OrderBookSnapshot
-- OrderBookDelta
-- Candle
-- TickerEvent
-
-Output
-
-Event successfully identified.
-
----
-
-## Step 8 – Validate Incoming Data
-
-The received JSON message is validated using Pydantic models.
-
-Validation checks include:
-
-- Required fields
-- Correct data types
-- Missing values
-- Invalid values
-
-If validation fails:
-
-- Log error
-- Ignore invalid message
-- Continue processing
-
-Output
-
-Validated event.
-
----
-
-## Step 9 – Convert Into Internal Models
-
-Validated JSON is converted into standardized internal event objects.
-
-Examples
-
-Raw Exchange JSON
-
-↓
-
-TradeEvent
-
-TickerEvent
-
-OrderBookDelta
-
-Candle
-
-Output
-
-Internal event object created.
-
----
-
-## Step 10 – Forward Event
-
-Validated event objects are forwarded to downstream services.
-
-Consumers include:
-
-- Strategy Engine
-- Trading Module
-- Dashboard
-- AI Reasoning Module
-- Data Storage
-
-Output
-
-Event successfully delivered.
-
----
-
-## Step 11 – Continuous Streaming
-
-The application continues receiving market events until shutdown.
-
-The following cycle repeats continuously:
-
-Receive
-
-↓
-
-Validate
-
-↓
-
-Convert
-
-↓
-
-Forward
-
-↓
-
-Receive Next Event
-
----
-
-## Step 12 – Connection Loss
-
-If the WebSocket connection is interrupted:
-
-The application
-
-- Detects disconnection
-- Logs the failure
-- Waits according to retry policy
-- Attempts reconnection
-- Restores subscriptions
-- Resumes streaming
-
-No manual intervention is required.
-
----
-
-## Step 13 – Application Shutdown
-
-When the application is stopped:
-
-- Close WebSocket connection
-- Release resources
-- Flush logs
-- Exit gracefully
-
----
-
-# 4. Sequence Flow
-
-Application
-
-↓
-
-Configuration
-
-↓
-
-Binance Adapter
-
-↓
-
-WebSocket Connection
-
-↓
-
-Subscribe Streams
-
-↓
-
-Receive JSON
-
-↓
-
-Validate
-
-↓
-
-Create Event Models
-
-↓
-
-Forward Events
-
-↓
-
+      │
+      ▼
+Load Configuration (config/exchange.yaml, .env)
+      │
+      ▼
+Initialize Binance Adapter
+      │
+      ▼
+Start two independent tasks:
+  - market data stream (ticker + trade)
+  - order book stream (depth)
+      │
+      ▼
+For the order-book stream specifically:
+Subscribe → buffer deltas → fetch REST snapshot (once) → reconcile (TRD §6.1)
+      │
+      ▼
+Receive JSON (all streams, book stream now "live")
+      │
+      ▼
+Identify Event Type
+      │
+      ▼
+Deduplicate (TRD §7)
+      │
+      ▼
+Validate Data
+      │
+      ▼
+Create Pydantic Model
+      │
+      ▼
+Forward Event (see §3 — Forwarding Contract)
+      │
+      ▼
 Repeat
-
-↓
-
-Shutdown
+```
 
 ---
 
-# 5. Decision Points
+## 2. Reconnect Flow (distinct from cold start)
 
-### Connection Successful?
+Reconnection is **not** a simple loop back to cold start. It differs by stream:
 
-Yes
+### 2.1 Trade / Ticker / Candle stream reconnect
+```
+Connection Lost (this stream only)
+      │
+      ▼
+Log disconnect + reason
+      │
+      ▼
+Backoff (per config/exchange.yaml: 1s → 60s, 2x multiplier)
+      │
+      ▼
+Reconnect → Resubscribe → Resume forwarding
+```
 
-↓
-
-Continue
-
-No
-
-↓
-
-Retry Connection
-
----
-
-### Valid JSON?
-
-Yes
-
-↓
-
-Create Event
-
-No
-
-↓
-
-Discard Message
-
----
-
-### Supported Event?
-
-Yes
-
-↓
-
-Process Event
-
-No
-
-↓
-
-Ignore Event
-
----
-
-# 6. Error Recovery Flow
-
-Connection Lost
-
-↓
-
-Log Error
-
-↓
-
-Wait
-
-↓
-
+### 2.2 Order-book stream reconnect (materially different — requires reconciliation)
+```
+Connection Lost (book stream)
+      │
+      ▼
+Log disconnect + reason
+      │
+      ▼
+Backoff
+      │
+      ▼
 Reconnect
+      │
+      ▼
+Mark book stream state = "reconciling" (NOT yet "live")
+      │
+      ▼
+Full reconciliation procedure (TRD §6.1):
+  Buffer live deltas → fetch fresh REST snapshot (once) →
+  keep buffering until a delta bridges it → apply in contiguous order
+      │
+      ▼
+Reconciliation succeeds? ──No──▶ Keep buffering; re-snapshot only if
+      │ Yes                       the buffer runs away (stale snapshot)
+      ▼
+Mark book stream state = "live"
+      │
+      ▼
+Resume normal forwarding
+```
 
-↓
-
-Restore Streams
-
-↓
-
-Resume Collection
+**Why this matters:** other streams are stateless/append-only, so "resubscribe and resume" is correct for them. The order book is cumulative state — resuming without reconciliation risks a book that looks structurally valid but has silently missed updates. This is the single highest-risk path in the module and is drawn separately rather than folded into a generic "reconnect" arrow.
 
 ---
 
-# 7. End State
+## 3. Forwarding Contract
 
-The application remains in a continuous event-processing loop until manually stopped. During execution, all incoming market data is validated, standardized, and forwarded to downstream modules while maintaining a reliable WebSocket connection.
+Validated, deduplicated events are forwarded via async generators exposed by the adapter:
+
+- `stream_market_data(symbols)` — yields `TickerEvent` / `TradeEvent`
+- `stream_order_book(symbol)` — yields `(OrderBookDelta, OrderBook)` tuples, so consumers can persist the delta and read current book state without re-deriving it
+
+`services/market_data/runner.py` consumes both as independent `asyncio` tasks, batching writes to the persistence layer.
+
+**Phase 1 scope:** one process, in-memory generators — no external message bus (Kafka, etc.); that's explicitly a Future Enhancement (TRD §16).
+
+**Contract guarantees to downstream consumers:**
+- Every event yielded has already passed validation and deduplication.
+- Order-book events are only yielded once the book stream is in "live" (reconciled) state — never during reconciliation.
+- Forwarding failure (e.g. a DB commit failing) is logged; it does not crash the ingestion loop, and does not block other streams' event delivery.
 
 ---
 
-# End of Document
+## 4. Shutdown Flow
+
+```
+Shutdown Signal Received (e.g. SIGINT)
+      │
+      ▼
+Stop accepting new events from all streams
+      │
+      ▼
+Flush any in-flight/buffered events to the database (shielded from
+cancellation so the final commit can complete)
+      │
+      ▼
+If the final flush fails: write pending rows to a JSON-lines fallback
+file rather than losing them
+      │
+      ▼
+Log final state per stream
+      │
+      ▼
+Process exits
+```
+
+Distinguish this from a **disconnect** (§2), which is unplanned and triggers reconnection; shutdown is planned and triggers cleanup instead.
+
+**Known limitation:** on manual Ctrl+C the event loop begins tearing down before the shielded flush can always complete, so the final batch on one stream may land in the fallback file rather than the database. A SIGINT handler performing an orderly shutdown before loop teardown is the proper fix.
+
+---
+
+## 5. End State
+The application continuously processes validated, deduplicated market events — with the order book held to a stricter reconciliation guarantee than other streams — until a shutdown signal is received, at which point it exits per §4.
+
+---
+*End of Document*
