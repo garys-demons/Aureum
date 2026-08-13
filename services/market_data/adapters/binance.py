@@ -31,6 +31,7 @@ class BinanceAdapter(ExchangeAdapter):
     def __init__(self, config: dict[str, Any]):
         self.config = config
         self._ws = None
+        self._active_connections: dict[str, Any] = {}
 
     async def connect(self) -> None:
         """Open the WebSocket connection to Binance Testnet (base connection only)."""
@@ -43,6 +44,23 @@ class BinanceAdapter(ExchangeAdapter):
         if self._ws is not None:
             await self._ws.close()
             logger.info("disconnected_from_binance")
+
+    async def _force_disconnect(self, stream_key: str) -> None:
+        """
+        Testing hook (Phase 2): forcibly close ONE specific stream's active
+        connection, without touching any other stream. Used to prove FR-12
+        (per-stream failure isolation) deterministically, rather than
+        relying on killing the whole network connection.
+
+        stream_key: "ticker_trade" or "order_book_<SYMBOL>" (e.g. "order_book_BTCUSDT")
+        """
+        ws = self._active_connections.get(stream_key)
+        if ws is None:
+            logger.warning("force_disconnect_no_active_connection", stream_key=stream_key)
+            return
+
+        logger.info("force_disconnecting_stream", stream_key=stream_key)
+        await ws.close()
 
     async def stream_market_data(self, symbols: list[str]):
         """
@@ -86,6 +104,7 @@ class BinanceAdapter(ExchangeAdapter):
             try:
                 logger.info("subscribing_to_ticker_trade_streams", symbols=symbols, url=url)
                 async with websockets.connect(url) as ws:
+                    self._active_connections["ticker_trade"] = ws
                     logger.info("ticker_trade_stream_connected", symbols=symbols)
                     backoff = INITIAL_BACKOFF_SECONDS
 
@@ -143,24 +162,40 @@ class BinanceAdapter(ExchangeAdapter):
             try:
                 logger.info("order_book_connecting", symbol=symbol)
                 async with websockets.connect(stream_url) as ws:
+                    self._active_connections[f"order_book_{symbol}"] = ws
                     logger.info("order_book_reconciling", symbol=symbol)
                     backoff = INITIAL_BACKOFF_SECONDS
-
                     # Buffer live deltas while the REST snapshot is fetched
-                    # (TRD §6.1 steps 2-3) — do not discard anything.
+                    # (TRD §6.1 steps 2-3), PLUS a minimum extra window after
+                    # the fetch completes — depth updates don't arrive on a
+                    # fixed schedule, so buffering only as long as the fetch
+                    # itself takes is often too short to catch a bridging
+                    # delta (observed repeatedly in Phase 1/2 testing).
+                    MIN_BUFFER_SECONDS_AFTER_SNAPSHOT = 2.0
+
                     buffered_deltas = []
                     snapshot_task = asyncio.create_task(fetch_snapshot(symbol))
+                    snapshot = None
+                    buffer_deadline = None
 
-                    while not snapshot_task.done():
+                    while True:
+                        if snapshot_task.done() and snapshot is None:
+                            snapshot = snapshot_task.result()
+                            buffer_deadline = (
+                                asyncio.get_event_loop().time() + MIN_BUFFER_SECONDS_AFTER_SNAPSHOT
+                            )
+
+                        if buffer_deadline is not None and asyncio.get_event_loop().time() >= buffer_deadline:
+                            break
+
                         try:
                             raw_message = await asyncio.wait_for(ws.recv(), timeout=1.0)
                         except asyncio.TimeoutError:
                             continue
+
                         raw = json.loads(raw_message)
                         wrapped = {"stream": f"{symbol.lower()}@depth", "data": raw}
                         buffered_deltas.append(parse_order_book_delta(wrapped))
-
-                    snapshot = await snapshot_task
 
                     # Find the correct starting point and verify contiguity
                     # (TRD §6.1 steps 4-6). Any failure -> re-fetch and retry.
