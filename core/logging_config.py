@@ -18,6 +18,7 @@ can't leak a secret into logs or into core/persistence's audit trail.
 
 import logging
 import os
+import re
 import sys
 
 import structlog
@@ -46,11 +47,41 @@ SENSITIVE_KEYS = {
     "token",
 }
 
+_NON_ALNUM = re.compile(r"[^a-z0-9]")
+
+
+def _normalize_key(key: str) -> str:
+    """Lowercases and strips separators so 'api_key', 'apiKey', and
+    'API-KEY' are all compared as the same thing: 'apikey'."""
+    return _NON_ALNUM.sub("", key.lower())
+
+
+# Precomputed once at import time, not per log call.
+_NORMALIZED_PATTERNS = [_normalize_key(p) for p in SENSITIVE_KEYS]
+
 
 def scrub_sensitive_data(logger, method_name, event_dict):
-    """Structlog processor: redact any key that looks sensitive."""
+    """
+    Structlog processor: redact any key whose name CONTAINS a sensitive
+    pattern, ignoring case and separator style (_, -, camelCase all
+    normalize the same way).
+
+    Why substring + normalization, not exact match: a fixed set of
+    exact key names misses real variants — "apiKey", "my_api_secret",
+    "AUTH-TOKEN-2" would all have slipped through the old exact-match
+    check (flagged in docs/risk_register.md, 2026-08-06). This catches
+    all of those.
+
+    Tradeoff, accepted deliberately: a field genuinely named something
+    like "secretary_name" would also get redacted, since it contains
+    "secret". Over-redacting a rare, harmless field is a much smaller
+    problem than under-redacting a real credential — same "cheap to
+    over-include, expensive to miss one" principle SENSITIVE_KEYS
+    itself was built on.
+    """
     for key in list(event_dict.keys()):
-        if key.lower() in SENSITIVE_KEYS:
+        normalized = _normalize_key(key)
+        if any(pattern in normalized for pattern in _NORMALIZED_PATTERNS):
             event_dict[key] = "***REDACTED***"
     return event_dict
 

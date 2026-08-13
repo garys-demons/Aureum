@@ -1,4 +1,4 @@
-# Project Compass
+# Aureum
 
 Event-driven quant research & trading platform. See `docs/` for the full
 architecture and phase roadmap.

@@ -1,7 +1,7 @@
 [project]
-name = "project-compass"
+name = "Aureum"
 version = "0.1.0"
-description = "Project Compass — event-driven quant research & trading platform"
+description = "Aureum — event-driven quant research & trading platform"
 requires-python = ">=3.11"
 dependencies = [
     "pydantic>=2.7",
@@ -13,6 +13,8 @@ dependencies = [
     "structlog>=24.1",
     "pyyaml>=6.0",
     "python-dotenv>=1.0",
+    "python-binance>=1.0.19",
+    "greenlet>=3.0",
 ]
 
 [project.optional-dependencies]
@@ -20,6 +22,7 @@ dev = [
     "pytest>=8.0",
     "pytest-asyncio>=0.23",
     "ruff>=0.4",
+    "aiosqlite>=0.20",
 ]
 
 [tool.pytest.ini_options]
@@ -29,3 +32,6 @@ testpaths = ["tests"]
 [build-system]
 requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["apps*", "core*", "infra*", "config*", "services*"]

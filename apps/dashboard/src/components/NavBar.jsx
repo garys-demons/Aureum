@@ -1,0 +1,26 @@
+import { NavLink } from 'react-router-dom'
+
+const links = [
+  { to: '/', label: 'Overview', end: true },
+  { to: '/audit-log', label: 'Audit Log' },
+  { to: '/anomalies', label: 'Anomalies' },
+]
+
+function NavBar() {
+  return (
+    <nav className="navbar">
+      <div className="navbar-brand">Aureum</div>
+      <ul className="navbar-links">
+        {links.map((link) => (
+          <li key={link.to}>
+            <NavLink to={link.to} end={link.end}>
+              {link.label}
+            </NavLink>
+          </li>
+        ))}
+      </ul>
+    </nav>
+  )
+}
+
+export default NavBar

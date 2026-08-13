@@ -1,0 +1,27 @@
+const BASE_URL = '/api'
+
+async function request(path, options = {}) {
+  const res = await fetch(`${BASE_URL}${path}`, {
+    headers: { 'Content-Type': 'application/json' },
+    ...options,
+  })
+
+  if (!res.ok) {
+    const body = await res.text().catch(() => '')
+    throw new Error(`Request failed (${res.status}): ${body}`)
+  }
+
+  return res.json()
+}
+
+export const api = {
+  getAuditLog: (params = {}) => {
+    const qs = new URLSearchParams(params).toString()
+    return request(`/audit-log${qs ? `?${qs}` : ''}`)
+  },
+  getAnomalies: (params = {}) => {
+    const qs = new URLSearchParams(params).toString()
+    return request(`/anomalies${qs ? `?${qs}` : ''}`)
+  },
+  getOverviewStats: () => request('/overview'),
+}
