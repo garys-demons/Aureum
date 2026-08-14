@@ -4,6 +4,7 @@ const links = [
   { to: '/', label: 'Overview', end: true },
   { to: '/audit-log', label: 'Audit Log' },
   { to: '/anomalies', label: 'Anomalies' },
+  { to: '/order-book', label: 'Order Book' },
 ]
 
 function NavBar() {
