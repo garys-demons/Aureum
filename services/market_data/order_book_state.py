@@ -1,11 +1,15 @@
 """
 OrderBook — maintains live, in-memory order book state and applies
-incoming deltas (Phase 2, replay harness + live use).
+incoming deltas.
 
-Deliberately separate from order_book.py (which handles the reconciliation
-PROCEDURE — fetching snapshots, buffering, finding the right starting
-point). This class handles APPLYING deltas once reconciliation has decided
-they're safe to apply.
+NOTE: There are two OrderBook implementations in this codebase.
+- This one is used exclusively by replay.py for deterministic, offline
+  replay testing (Phase 2 exit criterion: "book stays synchronized under
+  replay testing").
+- services/market_data/order_book.py has a separate OrderBook used by the
+  LIVE pipeline (stream_order_book() in adapters/binance.py).
+They are not interchangeable and are kept deliberately separate — this
+one is a lightweight testing utility, not wired into live data.
 """
 from services.market_data.models import OrderBookSnapshot, OrderBookDelta, PriceLevel
 
