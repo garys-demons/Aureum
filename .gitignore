@@ -11,3 +11,6 @@ data/processed/*
 !data/raw/.gitkeep
 !data/processed/.gitkeep
 .DS_Store
+check_db.py 
+clear_audit.py 
+failed_batches/

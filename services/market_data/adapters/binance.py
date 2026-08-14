@@ -26,6 +26,11 @@ INITIAL_BACKOFF_SECONDS = 1
 MAX_BACKOFF_SECONDS = 60
 BACKOFF_MULTIPLIER = 2
 
+# If the buffer grows past this while still unable to bridge the snapshot,
+# the snapshot is genuinely stale and we re-fetch. Should effectively never
+# happen in normal operation.
+MAX_BUFFER_BEFORE_RESNAPSHOT = 200
+
 
 class BinanceAdapter(ExchangeAdapter):
     def __init__(self, config: dict[str, Any]):
@@ -91,11 +96,13 @@ class BinanceAdapter(ExchangeAdapter):
         exponential backoff on disconnect (TRD §6.3). Stateless/append-only
         streams — resubscribe and resume directly on reconnect (TRD §6.2).
         """
-        from services.market_data.parsers import parse_ticker_event, parse_trade_event
+        from services.market_data.parsers import parse_candle_event, parse_ticker_event, parse_trade_event
         from services.market_data.dedup import TradeDeduplicator
 
         dedup = TradeDeduplicator()
-        stream_names = "/".join(f"{s.lower()}@ticker/{s.lower()}@trade" for s in symbols)
+        stream_names = "/".join(
+            f"{s.lower()}@ticker/{s.lower()}@trade/{s.lower()}@kline_1m" for s in symbols
+        )
         url = f"wss://stream.testnet.binance.vision/stream?streams={stream_names}"
 
         backoff = INITIAL_BACKOFF_SECONDS
@@ -129,6 +136,18 @@ class BinanceAdapter(ExchangeAdapter):
                                 dedup.mark_seen(trade)
                                 await queue.put(trade)
 
+                            elif stream_name.endswith("@kline_1m"):
+                                # Binance sends an update on every trade within
+                                # the current candle (is_closed=False), then one
+                                # final update when the bar completes
+                                # (is_closed=True). We push every update onto
+                                # the shared queue — the adapter's job is to
+                                # report what's actually happening, not decide
+                                # what's worth keeping. Whether to persist
+                                # in-progress bars is a downstream (runner.py)
+                                # decision (FR-6).
+                                await queue.put(parse_candle_event(raw))
+
                         except Exception as e:
                             logger.error("failed_to_parse_message", error=str(e), raw=raw)
                             continue
@@ -142,103 +161,105 @@ class BinanceAdapter(ExchangeAdapter):
                 await asyncio.sleep(backoff)
                 backoff = min(backoff * BACKOFF_MULTIPLIER, MAX_BACKOFF_SECONDS)
 
-    async def _run_order_book_stream(self, symbol: str, queue: asyncio.Queue) -> None:
+    async def stream_order_book(self, symbol: str):
         """
-        Maintain a reconciled local order book for `symbol` (TRD §6.1).
+        Stream order book deltas for one symbol on a dedicated connection.
 
-        On initial connect and on ANY disconnect, this does NOT simply
-        resubscribe — it re-runs the full reconciliation procedure:
-        buffer live deltas, fetch a fresh REST snapshot, find the correct
-        starting delta, and verify contiguity. Any gap triggers a full
-        re-reconciliation, not a skip (TRD §6.1 step 6, §6.2).
+        Implements the TRD §6.1 reconciliation procedure: subscribe first,
+        buffer deltas while fetching the REST snapshot, reconcile, then apply
+        in contiguous order. Any gap triggers a full re-sync rather than
+        silently continuing with a corrupt book.
+
+        Runs on its own WebSocket so a book-stream reconnect doesn't disturb
+        trade/ticker flow (TRD §6.2).
+
+        Yields (delta, book) so callers can persist the delta and read current
+        book state without re-deriving it.
         """
-        from services.market_data.order_book import fetch_snapshot, reconcile
         from services.market_data.parsers import parse_order_book_delta
+        from services.market_data.order_book import fetch_snapshot, reconcile, OrderBook
 
-        stream_url = f"wss://stream.testnet.binance.vision/ws/{symbol.lower()}@depth"
+        url = f"wss://stream.testnet.binance.vision/stream?streams={symbol.lower()}@depth"
         backoff = INITIAL_BACKOFF_SECONDS
 
         while True:
             try:
-                logger.info("order_book_connecting", symbol=symbol)
-                async with websockets.connect(stream_url) as ws:
-                    self._active_connections[f"order_book_{symbol}"] = ws
-                    logger.info("order_book_reconciling", symbol=symbol)
+                logger.info("book_stream_subscribing", symbol=symbol, url=url)
+                async with websockets.connect(url) as ws:
+                    logger.info("book_stream_connected", symbol=symbol, state="reconciling")
                     backoff = INITIAL_BACKOFF_SECONDS
-                    # Buffer live deltas while the REST snapshot is fetched
-                    # (TRD §6.1 steps 2-3), PLUS a minimum extra window after
-                    # the fetch completes — depth updates don't arrive on a
-                    # fixed schedule, so buffering only as long as the fetch
-                    # itself takes is often too short to catch a bridging
-                    # delta (observed repeatedly in Phase 1/2 testing).
-                    MIN_BUFFER_SECONDS_AFTER_SNAPSHOT = 2.0
 
-                    buffered_deltas = []
-                    snapshot_task = asyncio.create_task(fetch_snapshot(symbol))
+                    book: OrderBook | None = None
                     snapshot = None
-                    buffer_deadline = None
+                    buffer: list = []
 
-                    while True:
-                        if snapshot_task.done() and snapshot is None:
-                            snapshot = snapshot_task.result()
-                            buffer_deadline = (
-                                asyncio.get_event_loop().time() + MIN_BUFFER_SECONDS_AFTER_SNAPSHOT
-                            )
-
-                        if buffer_deadline is not None and asyncio.get_event_loop().time() >= buffer_deadline:
-                            break
-
+                    async for raw_message in ws:
                         try:
-                            raw_message = await asyncio.wait_for(ws.recv(), timeout=1.0)
-                        except asyncio.TimeoutError:
+                            raw = json.loads(raw_message)
+                        except json.JSONDecodeError:
+                            logger.warning("book_invalid_json", raw=raw_message)
                             continue
 
-                        raw = json.loads(raw_message)
-                        wrapped = {"stream": f"{symbol.lower()}@depth", "data": raw}
-                        buffered_deltas.append(parse_order_book_delta(wrapped))
+                        try:
+                            delta = parse_order_book_delta(raw)
+                        except Exception as e:
+                            logger.error("book_parse_failed", error=str(e))
+                            continue
 
-                    # Find the correct starting point and verify contiguity
-                    # (TRD §6.1 steps 4-6). Any failure -> re-fetch and retry.
-                    try:
-                        ordered_deltas = reconcile(snapshot, buffered_deltas)
-                    except ValueError as e:
-                        logger.warning(
-                            "order_book_reconciliation_failed_retrying",
-                            symbol=symbol,
-                            error=str(e),
-                        )
-                        continue  # re-enter outer loop: fresh connect + fresh snapshot
+                        # --- Reconciling ---
+                        if book is None:
+                            buffer.append(delta)
 
-                    await queue.put(snapshot)
-                    last_update_id = snapshot.last_update_id
-                    for delta in ordered_deltas:
-                        await queue.put(delta)
-                        last_update_id = delta.final_update_id
+                            # Fetch the snapshot exactly once. Re-fetching on
+                            # every failed reconcile is a trap: each new snapshot
+                            # is newer than the buffered deltas, so they all get
+                            # filtered out and reconciliation never succeeds.
+                            if snapshot is None:
+                                snapshot = await fetch_snapshot(symbol)
 
-                    logger.info("order_book_live", symbol=symbol, last_update_id=last_update_id)
+                            try:
+                                ordered = reconcile(snapshot, buffer)
+                            except ValueError:
+                                # Not bridgeable yet — keep buffering. Only
+                                # re-snapshot if the buffer runs away, meaning
+                                # the snapshot is genuinely stale.
+                                if len(buffer) > MAX_BUFFER_BEFORE_RESNAPSHOT:
+                                    logger.warning(
+                                        "book_snapshot_stale_refetching", symbol=symbol
+                                    )
+                                    snapshot = None
+                                    buffer = []
+                                continue
 
-                    # Now "live" — forward each new delta, verifying it
-                    # connects exactly to the previous one.
-                    async for raw_message in ws:
-                        raw = json.loads(raw_message)
-                        wrapped = {"stream": f"{symbol.lower()}@depth", "data": raw}
-                        delta = parse_order_book_delta(wrapped)
-
-                        if delta.first_update_id != last_update_id + 1:
-                            logger.warning(
-                                "order_book_gap_detected_reconciling",
+                            book = OrderBook.from_snapshot(snapshot)
+                            for d in ordered:
+                                book.apply(d)
+                            book.mark_live()
+                            buffer = []
+                            logger.info(
+                                "book_reconciled",
                                 symbol=symbol,
-                                expected=last_update_id + 1,
-                                got=delta.first_update_id,
+                                last_update_id=book.last_update_id,
+                                depth=book.depth(),
                             )
-                            break  # exit inner loop -> full reconciliation restarts
+                            yield ordered[-1], book
+                            continue
 
-                        await queue.put(delta)
-                        last_update_id = delta.final_update_id
+                        # --- Live: apply with contiguity enforcement ---
+                        try:
+                            book.apply(delta)
+                            yield delta, book
+                        except ValueError as e:
+                            logger.error(
+                                "book_sequence_gap_resyncing", symbol=symbol, error=str(e)
+                            )
+                            book = None
+                            snapshot = None
+                            buffer = [delta]
 
             except (websockets.exceptions.ConnectionClosed, OSError) as e:
                 logger.warning(
-                    "order_book_disconnected_retrying",
+                    "book_stream_disconnected_retrying",
                     symbol=symbol,
                     error=str(e),
                     backoff_seconds=backoff,

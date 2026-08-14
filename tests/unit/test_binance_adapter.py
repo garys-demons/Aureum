@@ -2,13 +2,19 @@
 import pytest
 
 from services.market_data.adapters.binance import BinanceAdapter
-from services.market_data.models import TickerEvent, TradeEvent, OrderBookSnapshot, OrderBookDelta
+from services.market_data.models import Candle, TickerEvent, TradeEvent
 
 
 @pytest.mark.asyncio
 async def test_stream_market_data_yields_parsed_models():
-    """Connects to real Binance Testnet and confirms parsed model instances arrive
-    across all stream types (ticker, trade, and order book).
+    """Connects to real Binance Testnet and confirms parsed model instances arrive.
+
+    This hits the real network — if it ever becomes slow/flaky in CI, mark
+    it with @pytest.mark.skip and revisit; for Phase 1 solo dev, keeping it
+    real is more valuable than mocking too early.
+
+    Now that @kline_1m is subscribed (FR-6), Candle instances can arrive
+    here too, not just TickerEvent/TradeEvent.
     """
     adapter = BinanceAdapter(config={})
     received = []
@@ -20,5 +26,5 @@ async def test_stream_market_data_yields_parsed_models():
 
     assert len(received) == 5
     for event in received:
-        assert isinstance(event, (TickerEvent, TradeEvent, OrderBookSnapshot, OrderBookDelta))
+        assert isinstance(event, (TickerEvent, TradeEvent, Candle))
         assert event.symbol == "BTCUSDT"

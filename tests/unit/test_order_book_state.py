@@ -1,101 +1,81 @@
-"""Unit tests for OrderBook state tracking and delta application (Phase 2)."""
-from services.market_data.models import OrderBookSnapshot, OrderBookDelta, PriceLevel, SnapshotSource
-from services.market_data.order_book_state import OrderBook
+"""
+Tests for the OrderBook state class (services/market_data/order_book.py).
+
+Separate from test_order_book.py, which covers reconcile(). This file
+covers the book itself: applying deltas, sequence enforcement, and
+Binance's quantity-0-means-delete semantics.
+"""
+import pytest
+
+from services.market_data.models import (
+    OrderBookDelta,
+    OrderBookSnapshot,
+    PriceLevel,
+    SnapshotSource,
+)
+from services.market_data.order_book import OrderBook
 
 
-def make_snapshot() -> OrderBookSnapshot:
+def make_snapshot(last_update_id=100, symbol="BTCUSDT"):
     return OrderBookSnapshot(
         event_type="depth_snapshot",
         exchange="binance",
-        symbol="BTCUSDT",
-        event_time=1,
-        received_time=1,
-        last_update_id=100,
-        bids=[
-            PriceLevel(price=50000, quantity=1.0),
-            PriceLevel(price=49999, quantity=2.0),
-        ],
-        asks=[
-            PriceLevel(price=50001, quantity=1.5),
-            PriceLevel(price=50002, quantity=0.5),
-        ],
-        snapshot_time=1,
+        symbol=symbol,
+        event_time=1_700_000_000_000,
+        received_time=1_700_000_000_000,
+        last_update_id=last_update_id,
+        bids=[PriceLevel(price=100.0, quantity=1.0), PriceLevel(price=99.0, quantity=2.0)],
+        asks=[PriceLevel(price=101.0, quantity=1.5), PriceLevel(price=102.0, quantity=3.0)],
+        snapshot_time=1_700_000_000_000,
         source=SnapshotSource.REST_FULL,
     )
 
 
-def make_delta(first_id: int, final_id: int, bids=None, asks=None) -> OrderBookDelta:
+def make_delta(first, final, bids=None, asks=None, symbol="BTCUSDT"):
     return OrderBookDelta(
         event_type="depth_update",
         exchange="binance",
-        symbol="BTCUSDT",
-        event_time=1,
-        received_time=1,
-        first_update_id=first_id,
-        final_update_id=final_id,
+        symbol=symbol,
+        event_time=1_700_000_000_000,
+        received_time=1_700_000_000_000,
+        first_update_id=first,
+        final_update_id=final,
         bids=bids or [],
         asks=asks or [],
     )
 
 
-def test_order_book_initializes_from_snapshot():
-    book = OrderBook(make_snapshot())
-
-    assert book.symbol == "BTCUSDT"
+def test_from_snapshot_populates_both_sides():
+    book = OrderBook.from_snapshot(make_snapshot())
+    assert book.bids == {100.0: 1.0, 99.0: 2.0}
+    assert book.asks == {101.0: 1.5, 102.0: 3.0}
     assert book.last_update_id == 100
-    assert book.best_bid == 50000
-    assert book.best_ask == 50001
+    assert book.is_live is False
 
 
-def test_apply_delta_updates_existing_price_level():
-    """A delta with a new quantity at an existing price should update it, not add a duplicate."""
-    book = OrderBook(make_snapshot())
-    delta = make_delta(101, 101, bids=[PriceLevel(price=50000, quantity=3.5)])
-
-    book.apply_delta(delta)
-
-    assert book.snapshot_state()["bids"][50000] == 3.5
-    assert book.last_update_id == 101
+def test_cannot_apply_delta_before_snapshot():
+    book = OrderBook("BTCUSDT")
+    with pytest.raises(ValueError, match="before a snapshot"):
+        book.apply(make_delta(101, 105))
 
 
-def test_apply_delta_adds_new_price_level():
-    book = OrderBook(make_snapshot())
-    delta = make_delta(101, 101, bids=[PriceLevel(price=49998, quantity=0.75)])
-
-    book.apply_delta(delta)
-
-    assert book.snapshot_state()["bids"][49998] == 0.75
-
-
-def test_apply_delta_zero_quantity_removes_price_level():
-    """quantity=0 means 'this price level is gone' — must be removed, not stored as 0."""
-    book = OrderBook(make_snapshot())
-    delta = make_delta(101, 101, asks=[PriceLevel(price=50002, quantity=0)])
-
-    book.apply_delta(delta)
-
-    assert 50002 not in book.snapshot_state()["asks"]
+def test_bridging_delta_is_accepted_before_live():
+    book = OrderBook.from_snapshot(make_snapshot(last_update_id=100))
+    # Straddles 101 — exactly what reconcile() selects.
+    book.apply(make_delta(98, 103, bids=[PriceLevel(price=100.0, quantity=5.0)]))
+    assert book.bids[100.0] == 5.0
+    assert book.last_update_id == 103
 
 
-def test_best_bid_and_ask_update_after_delta():
-    book = OrderBook(make_snapshot())
-    delta = make_delta(101, 101, bids=[PriceLevel(price=50000.5, quantity=1.0)])
-
-    book.apply_delta(delta)
-
-    assert book.best_bid == 50000.5  # new higher bid
+def test_non_bridging_first_delta_is_rejected():
+    book = OrderBook.from_snapshot(make_snapshot(last_update_id=100))
+    with pytest.raises(ValueError, match="does not bridge"):
+        book.apply(make_delta(105, 110))
 
 
-def test_multiple_deltas_apply_in_sequence_correctly():
-    """Simulates a short realistic run: several deltas applied one after another."""
-    book = OrderBook(make_snapshot())
-
-    book.apply_delta(make_delta(101, 101, bids=[PriceLevel(price=50000, quantity=2.0)]))
-    book.apply_delta(make_delta(102, 102, asks=[PriceLevel(price=50001, quantity=0)]))
-    book.apply_delta(make_delta(103, 105, bids=[PriceLevel(price=49997, quantity=0.5)]))
-
-    state = book.snapshot_state()
-    assert state["bids"][50000] == 2.0
-    assert 50001 not in state["asks"]
-    assert state["bids"][49997] == 0.5
-    assert book.last_update_id == 105
+def test_contiguous_deltas_apply_once_live():
+    book = OrderBook.from_snapshot(make_snapshot(last_update_id=100))
+    book.apply(make_delta(98, 103))
+    book.mark_live()
+    book.apply(make_delta(104, 107, asks=[PriceLevel(price=101.0, quantity=9.0)]))
+    assert book.asks[101.0] == 9.0
