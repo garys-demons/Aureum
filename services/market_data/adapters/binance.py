@@ -1,8 +1,11 @@
 """
 BinanceAdapter — concrete ExchangeAdapter for Binance Spot Testnet.
 
-Day 3: stream_market_data (WebSocket client, reconnect/backoff) — Hansika
-Day 4: fetch_historical_candles (REST downloader) — Gauri
+Runs independently-tracked stream lifecycles concurrently (TRD §6.2):
+  - ticker + trade (stateless, append-only — resubscribe-and-resume on reconnect)
+  - order book, per symbol (stateful — full reconciliation on reconnect, TRD §6.1)
+All parsed, validated, deduplicated events are merged onto a single queue
+and yielded to the caller via stream_market_data().
 """
 import asyncio
 import json
@@ -33,6 +36,7 @@ class BinanceAdapter(ExchangeAdapter):
     def __init__(self, config: dict[str, Any]):
         self.config = config
         self._ws = None
+        self._active_connections: dict[str, Any] = {}
 
     async def connect(self) -> None:
         """Open the WebSocket connection to Binance Testnet (base connection only)."""
@@ -46,17 +50,56 @@ class BinanceAdapter(ExchangeAdapter):
             await self._ws.close()
             logger.info("disconnected_from_binance")
 
+    async def _force_disconnect(self, stream_key: str) -> None:
+        """
+        Testing hook (Phase 2): forcibly close ONE specific stream's active
+        connection, without touching any other stream. Used to prove FR-12
+        (per-stream failure isolation) deterministically, rather than
+        relying on killing the whole network connection.
+
+        stream_key: "ticker_trade" or "order_book_<SYMBOL>" (e.g. "order_book_BTCUSDT")
+        """
+        ws = self._active_connections.get(stream_key)
+        if ws is None:
+            logger.warning("force_disconnect_no_active_connection", stream_key=stream_key)
+            return
+
+        logger.info("force_disconnecting_stream", stream_key=stream_key)
+        await ws.close()
+
     async def stream_market_data(self, symbols: list[str]):
         """
-        Connect to combined ticker + trade streams for the given symbols and
-        yield parsed, deduplicated MarketEvent models (TickerEvent, TradeEvent).
-        Automatically reconnects with exponential backoff on disconnect (TRD §6.3).
+        Run the ticker+trade stream and one order-book stream per symbol
+        concurrently, and yield all parsed events through a single merged
+        stream as they arrive. Each stream reconnects independently
+        (TRD §6.2) — a book-stream disconnect never interrupts ticker/trade.
+        """
+        queue: asyncio.Queue = asyncio.Queue()
+
+        tasks = [asyncio.create_task(self._run_ticker_trade_stream(symbols, queue))]
+        for symbol in symbols:
+            tasks.append(asyncio.create_task(self._run_order_book_stream(symbol, queue)))
+
+        try:
+            while True:
+                event = await queue.get()
+                yield event
+        finally:
+            for task in tasks:
+                task.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
+
+    async def _run_ticker_trade_stream(self, symbols: list[str], queue: asyncio.Queue) -> None:
+        """
+        Connect to combined ticker + trade streams and push parsed,
+        deduplicated events onto the shared queue. Reconnects with
+        exponential backoff on disconnect (TRD §6.3). Stateless/append-only
+        streams — resubscribe and resume directly on reconnect (TRD §6.2).
         """
         from services.market_data.parsers import parse_candle_event, parse_ticker_event, parse_trade_event
         from services.market_data.dedup import TradeDeduplicator
 
         dedup = TradeDeduplicator()
-
         stream_names = "/".join(
             f"{s.lower()}@ticker/{s.lower()}@trade/{s.lower()}@kline_1m" for s in symbols
         )
@@ -66,10 +109,10 @@ class BinanceAdapter(ExchangeAdapter):
 
         while True:
             try:
-                logger.info("subscribing_to_streams", symbols=symbols, url=url)
+                logger.info("subscribing_to_ticker_trade_streams", symbols=symbols, url=url)
                 async with websockets.connect(url) as ws:
-                    self._ws = ws
-                    logger.info("stream_connected", symbols=symbols)
+                    self._active_connections["ticker_trade"] = ws
+                    logger.info("ticker_trade_stream_connected", symbols=symbols)
                     backoff = INITIAL_BACKOFF_SECONDS
 
                     async for raw_message in ws:
@@ -83,7 +126,7 @@ class BinanceAdapter(ExchangeAdapter):
 
                         try:
                             if stream_name.endswith("@ticker"):
-                                yield parse_ticker_event(raw)
+                                await queue.put(parse_ticker_event(raw))
 
                             elif stream_name.endswith("@trade"):
                                 trade = parse_trade_event(raw)
@@ -91,18 +134,19 @@ class BinanceAdapter(ExchangeAdapter):
                                     logger.debug("duplicate_trade_dropped", trade_id=trade.trade_id)
                                     continue
                                 dedup.mark_seen(trade)
-                                yield trade
+                                await queue.put(trade)
 
                             elif stream_name.endswith("@kline_1m"):
                                 # Binance sends an update on every trade within
                                 # the current candle (is_closed=False), then one
                                 # final update when the bar completes
-                                # (is_closed=True). We yield every update here —
-                                # the adapter's job is to report what's actually
-                                # happening, not decide what's worth keeping.
-                                # Whether to persist in-progress bars is a
-                                # downstream (runner.py) decision (FR-6).
-                                yield parse_candle_event(raw)
+                                # (is_closed=True). We push every update onto
+                                # the shared queue — the adapter's job is to
+                                # report what's actually happening, not decide
+                                # what's worth keeping. Whether to persist
+                                # in-progress bars is a downstream (runner.py)
+                                # decision (FR-6).
+                                await queue.put(parse_candle_event(raw))
 
                         except Exception as e:
                             logger.error("failed_to_parse_message", error=str(e), raw=raw)
@@ -110,7 +154,7 @@ class BinanceAdapter(ExchangeAdapter):
 
             except (websockets.exceptions.ConnectionClosed, OSError) as e:
                 logger.warning(
-                    "stream_disconnected_retrying",
+                    "ticker_trade_stream_disconnected_retrying",
                     error=str(e),
                     backoff_seconds=backoff,
                 )
