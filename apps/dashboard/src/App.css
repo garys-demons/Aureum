@@ -88,3 +88,32 @@ code {
   font-size: 0.85rem;
   opacity: 0.85;
 }
+.stat-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 1rem;
+  margin-bottom: 1.5rem;
+}
+.stat-card {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  padding: 1rem;
+  border: 1px solid #2a2a2a;
+  border-radius: 6px;
+}
+.stat-label {
+  font-size: 0.75rem;
+  opacity: 0.6;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+.stat-value {
+  font-size: 1.25rem;
+  font-weight: 600;
+}
+.section-subtitle {
+  font-size: 1rem;
+  opacity: 0.8;
+  margin: 1.5rem 0 0.75rem;
+}

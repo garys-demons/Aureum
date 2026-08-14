@@ -24,4 +24,5 @@ export const api = {
     return request(`/anomalies${qs ? `?${qs}` : ''}`)
   },
   getOverviewStats: () => request('/overview'),
+  getOrderBook: (symbol) => request(`/order-book/${symbol}`),
 }
