@@ -12,8 +12,8 @@
 | Symbol | BTCUSDT |
 | Interval | 1m |
 | Source | Binance Spot Testnet REST (`/api/v3/klines`) |
-| Start (UTC) | 2026-08-14 12:37:00 |
-| End (UTC) | 2026-08-15 12:36:59 |
+| Start (UTC) | 2026-08-14 16:57:00 |
+| End (UTC) | 2026-08-15 16:56:59 |
 | Start (Unix ms) | 1786726620000 |
 | End (Unix ms) | 1786813019999 |
 | Candles fetched | 1440 |
