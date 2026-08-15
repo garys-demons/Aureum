@@ -168,3 +168,43 @@ async def test_fetch_historical_trades_paginates_correctly():
 
     assert len(trades) == MAX_CANDLES_PER_REQUEST + 3
     assert route.call_count == 2
+    
+from services.market_data.historical import find_candle_gaps, interval_to_ms
+
+
+def make_test_candle(open_time: int) -> Candle:
+    return Candle(
+        event_type="kline", exchange="binance", symbol="BTCUSDT",
+        event_time=open_time, received_time=open_time,
+        interval="1m", open_time=open_time, close_time=open_time + 59999,
+        open=100, high=100, low=100, close=100, volume=1, is_closed=True,
+    )
+
+
+def test_find_candle_gaps_none_when_contiguous():
+    candles = [make_test_candle(1700000000000 + i * 60000) for i in range(5)]
+    gaps = find_candle_gaps(candles, interval_ms=60000)
+    assert gaps == []
+
+
+def test_find_candle_gaps_detects_single_gap():
+    candles = [
+        make_test_candle(1700000000000),
+        make_test_candle(1700000060000),
+        # gap here — skips straight to +3 minutes instead of +2
+        make_test_candle(1700000240000),
+    ]
+    gaps = find_candle_gaps(candles, interval_ms=60000)
+    assert len(gaps) == 1
+    assert gaps[0] == (1700000120000, 1700000240000)
+
+
+def test_interval_to_ms_known_values():
+    assert interval_to_ms("1m") == 60000
+    assert interval_to_ms("5m") == 300000
+    assert interval_to_ms("1h") == 3600000
+
+
+def test_interval_to_ms_unknown_raises():
+    with pytest.raises(ValueError):
+        interval_to_ms("3d")

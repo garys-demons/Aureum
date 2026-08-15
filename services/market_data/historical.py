@@ -168,3 +168,31 @@ def _parse_raw_agg_trade(raw: dict, symbol: str) -> TradeEvent:
         buyer_maker=raw["m"],
         trade_time=raw["T"],
     )
+    
+def find_candle_gaps(candles: list[Candle], interval_ms: int) -> list[tuple[int, int]]:
+    """
+    Scan a list of candles (assumed sorted by open_time) and return any
+    gaps found — pairs of (expected_next_open_time, actual_open_time)
+    where consecutive candles aren't exactly interval_ms apart.
+
+    interval_ms: the expected spacing between candles, e.g. 60_000 for "1m".
+    """
+    gaps = []
+    for prev, curr in zip(candles, candles[1:]):
+        expected_next = prev.open_time + interval_ms
+        if curr.open_time != expected_next:
+            gaps.append((expected_next, curr.open_time))
+    return gaps
+
+INTERVAL_TO_MS = {
+    "1m": 60_000,
+    "5m": 5 * 60_000,
+    "1h": 60 * 60_000,
+}
+
+
+def interval_to_ms(interval: str) -> int:
+    """Convert a Binance interval string (e.g. '1m', '5m', '1h') to milliseconds."""
+    if interval not in INTERVAL_TO_MS:
+        raise ValueError(f"Unsupported interval: {interval}")
+    return INTERVAL_TO_MS[interval]
