@@ -35,6 +35,7 @@ Running log of risks, gaps, and issues found during review. Owned by Review & Ri
 | 2026-08-11 | Docs | **v2.0 doc revisions (reconciliation procedure, FR-11/12/13, composite dedup keys) were drafted after the documentation audit but never committed** — repo stayed on v1.0 while the team built against v2.0 requirements from memory | High | **Fixed** — v2.0 adopted (`docs/adopt-v2-revisions`, merged) |
 | 2026-08-12 | `services/market_data` | FR-6: kline stream never subscribed — same dead-code pattern order_book had | High | Fixed (PR #22, Aryan) |
 | 2026-08-13 | Process | PR #21's commit message ("risk register cleanup") didn't actually touch `risk_register.md` — real fixes existed in code but weren't reflected here for two days | Low | Fixed — this update |
+| 2026-08-15 | Process | `git push` silently failed after committing the order-book restore fix, leaving `dev` broken for hours. Hansika, Aryan, and Samarth each independently ran diagnostics before discovering the root cause: the push simply hadn't gone through (confirmed via `git branch -vv` showing "ahead 1"). No error was visible in the original session's output | Medium | Fixed — pushed successfully; process gap remains. Team should verify every push with `git log origin/<branch> --oneline -3` before telling anyone something's fixed, rather than trusting silent success |
 
 ---
 
@@ -49,3 +50,13 @@ Running log of risks, gaps, and issues found during review. Owned by Review & Ri
 | Zero duplicate events during sustained run | ✅ Verified — 0 duplicates across 9,559 rows |
 | All 13 FRs pass acceptance criteria | ◐ 8 pass, FR-6 now fixed pending re-audit, FR-2/8/12/13 partial, FR-11 needs re-check against committed v2.0 text |
 | p95 latency < 200ms | ⚠️ Accepted deviation — 2-4s measured, deferred to Phase 9 |
+
+## Phase 2 Exit — Status (2026-08-15)
+
+| Criterion | Status |
+|---|---|
+| Replay harness proves book stays synchronized | ✅ Verified — `test_replay.py`, including reconnect-boundary case, against a real captured fixture |
+| Microstructure metrics implemented + tested | ✅ Verified — microprice, depth-weighted price, imbalance, hand-calculated test values |
+| FR-12 (partial stream failure) closed properly | ✅ Verified — `test_fr12_isolation.py`, direct test rather than architectural inference |
+| Live pipeline runs clean end to end | ✅ Verified — 9,952 rows, all 5 event types persisted, clean shutdown |
+| Tests passing | ✅ 109/109 |

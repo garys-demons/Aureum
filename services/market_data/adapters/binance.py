@@ -1,8 +1,11 @@
 """
 BinanceAdapter — concrete ExchangeAdapter for Binance Spot Testnet.
 
-Day 3: stream_market_data (WebSocket client, reconnect/backoff) — Hansika
-Day 4: fetch_historical_candles (REST downloader) — Gauri
+Runs independently-tracked stream lifecycles concurrently (TRD §6.2):
+  - ticker + trade (stateless, append-only — resubscribe-and-resume on reconnect)
+  - order book, per symbol (stateful — full reconciliation on reconnect, TRD §6.1)
+All parsed, validated, deduplicated events are merged onto a single queue
+and yielded to the caller via stream_market_data().
 """
 import asyncio
 import json
@@ -33,6 +36,7 @@ class BinanceAdapter(ExchangeAdapter):
     def __init__(self, config: dict[str, Any]):
         self.config = config
         self._ws = None
+        self._active_connections: dict[str, Any] = {}
 
     async def connect(self) -> None:
         """Open the WebSocket connection to Binance Testnet (base connection only)."""
@@ -46,17 +50,56 @@ class BinanceAdapter(ExchangeAdapter):
             await self._ws.close()
             logger.info("disconnected_from_binance")
 
+    async def _force_disconnect(self, stream_key: str) -> None:
+        """
+        Testing hook (Phase 2): forcibly close ONE specific stream's active
+        connection, without touching any other stream. Used to prove FR-12
+        (per-stream failure isolation) deterministically, rather than
+        relying on killing the whole network connection.
+
+        stream_key: "ticker_trade" or "order_book_<SYMBOL>" (e.g. "order_book_BTCUSDT")
+        """
+        ws = self._active_connections.get(stream_key)
+        if ws is None:
+            logger.warning("force_disconnect_no_active_connection", stream_key=stream_key)
+            return
+
+        logger.info("force_disconnecting_stream", stream_key=stream_key)
+        await ws.close()
+
     async def stream_market_data(self, symbols: list[str]):
         """
-        Connect to combined ticker + trade streams for the given symbols and
-        yield parsed, deduplicated MarketEvent models (TickerEvent, TradeEvent).
-        Automatically reconnects with exponential backoff on disconnect (TRD §6.3).
+        Run the ticker+trade stream and one order-book stream per symbol
+        concurrently, and yield all parsed events through a single merged
+        stream as they arrive. Each stream reconnects independently
+        (TRD §6.2) — a book-stream disconnect never interrupts ticker/trade.
+        """
+        queue: asyncio.Queue = asyncio.Queue()
+
+        tasks = [asyncio.create_task(self._run_ticker_trade_stream(symbols, queue))]
+        for symbol in symbols:
+            tasks.append(asyncio.create_task(self._run_order_book_stream(symbol, queue)))
+
+        try:
+            while True:
+                event = await queue.get()
+                yield event
+        finally:
+            for task in tasks:
+                task.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
+
+    async def _run_ticker_trade_stream(self, symbols: list[str], queue: asyncio.Queue) -> None:
+        """
+        Connect to combined ticker + trade streams and push parsed,
+        deduplicated events onto the shared queue. Reconnects with
+        exponential backoff on disconnect (TRD §6.3). Stateless/append-only
+        streams — resubscribe and resume directly on reconnect (TRD §6.2).
         """
         from services.market_data.parsers import parse_candle_event, parse_ticker_event, parse_trade_event
         from services.market_data.dedup import TradeDeduplicator
 
         dedup = TradeDeduplicator()
-
         stream_names = "/".join(
             f"{s.lower()}@ticker/{s.lower()}@trade/{s.lower()}@kline_1m" for s in symbols
         )
@@ -66,10 +109,10 @@ class BinanceAdapter(ExchangeAdapter):
 
         while True:
             try:
-                logger.info("subscribing_to_streams", symbols=symbols, url=url)
+                logger.info("subscribing_to_ticker_trade_streams", symbols=symbols, url=url)
                 async with websockets.connect(url) as ws:
-                    self._ws = ws
-                    logger.info("stream_connected", symbols=symbols)
+                    self._active_connections["ticker_trade"] = ws
+                    logger.info("ticker_trade_stream_connected", symbols=symbols)
                     backoff = INITIAL_BACKOFF_SECONDS
 
                     async for raw_message in ws:
@@ -83,7 +126,7 @@ class BinanceAdapter(ExchangeAdapter):
 
                         try:
                             if stream_name.endswith("@ticker"):
-                                yield parse_ticker_event(raw)
+                                await queue.put(parse_ticker_event(raw))
 
                             elif stream_name.endswith("@trade"):
                                 trade = parse_trade_event(raw)
@@ -91,18 +134,19 @@ class BinanceAdapter(ExchangeAdapter):
                                     logger.debug("duplicate_trade_dropped", trade_id=trade.trade_id)
                                     continue
                                 dedup.mark_seen(trade)
-                                yield trade
+                                await queue.put(trade)
 
                             elif stream_name.endswith("@kline_1m"):
                                 # Binance sends an update on every trade within
                                 # the current candle (is_closed=False), then one
                                 # final update when the bar completes
-                                # (is_closed=True). We yield every update here —
-                                # the adapter's job is to report what's actually
-                                # happening, not decide what's worth keeping.
-                                # Whether to persist in-progress bars is a
-                                # downstream (runner.py) decision (FR-6).
-                                yield parse_candle_event(raw)
+                                # (is_closed=True). We push every update onto
+                                # the shared queue — the adapter's job is to
+                                # report what's actually happening, not decide
+                                # what's worth keeping. Whether to persist
+                                # in-progress bars is a downstream (runner.py)
+                                # decision (FR-6).
+                                await queue.put(parse_candle_event(raw))
 
                         except Exception as e:
                             logger.error("failed_to_parse_message", error=str(e), raw=raw)
@@ -110,112 +154,110 @@ class BinanceAdapter(ExchangeAdapter):
 
             except (websockets.exceptions.ConnectionClosed, OSError) as e:
                 logger.warning(
-                    "stream_disconnected_retrying",
+                    "ticker_trade_stream_disconnected_retrying",
                     error=str(e),
                     backoff_seconds=backoff,
                 )
                 await asyncio.sleep(backoff)
                 backoff = min(backoff * BACKOFF_MULTIPLIER, MAX_BACKOFF_SECONDS)
 
-    async def stream_order_book(self, symbol: str):
+    async def _run_order_book_stream(self, symbol: str, queue: asyncio.Queue) -> None:
         """
-        Stream order book deltas for one symbol on a dedicated connection.
+        Maintain a reconciled local order book for `symbol` (TRD §6.1).
 
-        Implements the TRD §6.1 reconciliation procedure: subscribe first,
-        buffer deltas while fetching the REST snapshot, reconcile, then apply
-        in contiguous order. Any gap triggers a full re-sync rather than
-        silently continuing with a corrupt book.
-
-        Runs on its own WebSocket so a book-stream reconnect doesn't disturb
-        trade/ticker flow (TRD §6.2).
-
-        Yields (delta, book) so callers can persist the delta and read current
-        book state without re-deriving it.
+        On initial connect and on ANY disconnect, this does NOT simply
+        resubscribe — it re-runs the full reconciliation procedure:
+        buffer live deltas, fetch a fresh REST snapshot, find the correct
+        starting delta, and verify contiguity. Any gap triggers a full
+        re-reconciliation, not a skip (TRD §6.1 step 6, §6.2).
         """
+        from services.market_data.order_book import fetch_snapshot, reconcile
         from services.market_data.parsers import parse_order_book_delta
-        from services.market_data.order_book import fetch_snapshot, reconcile, OrderBook
 
-        url = f"wss://stream.testnet.binance.vision/stream?streams={symbol.lower()}@depth"
+        stream_url = f"wss://stream.testnet.binance.vision/ws/{symbol.lower()}@depth"
         backoff = INITIAL_BACKOFF_SECONDS
 
         while True:
             try:
-                logger.info("book_stream_subscribing", symbol=symbol, url=url)
-                async with websockets.connect(url) as ws:
-                    logger.info("book_stream_connected", symbol=symbol, state="reconciling")
+                logger.info("order_book_connecting", symbol=symbol)
+                async with websockets.connect(stream_url) as ws:
+                    self._active_connections[f"order_book_{symbol}"] = ws
+                    logger.info("order_book_reconciling", symbol=symbol)
                     backoff = INITIAL_BACKOFF_SECONDS
+                    # Buffer live deltas while the REST snapshot is fetched
+                    # (TRD §6.1 steps 2-3), PLUS a minimum extra window after
+                    # the fetch completes — depth updates don't arrive on a
+                    # fixed schedule, so buffering only as long as the fetch
+                    # itself takes is often too short to catch a bridging
+                    # delta (observed repeatedly in Phase 1/2 testing).
+                    MIN_BUFFER_SECONDS_AFTER_SNAPSHOT = 2.0
 
-                    book: OrderBook | None = None
+                    buffered_deltas = []
+                    snapshot_task = asyncio.create_task(fetch_snapshot(symbol))
                     snapshot = None
-                    buffer: list = []
+                    buffer_deadline = None
 
+                    while True:
+                        if snapshot_task.done() and snapshot is None:
+                            snapshot = snapshot_task.result()
+                            buffer_deadline = (
+                                asyncio.get_event_loop().time() + MIN_BUFFER_SECONDS_AFTER_SNAPSHOT
+                            )
+
+                        if buffer_deadline is not None and asyncio.get_event_loop().time() >= buffer_deadline:
+                            break
+
+                        try:
+                            raw_message = await asyncio.wait_for(ws.recv(), timeout=1.0)
+                        except asyncio.TimeoutError:
+                            continue
+
+                        raw = json.loads(raw_message)
+                        wrapped = {"stream": f"{symbol.lower()}@depth", "data": raw}
+                        buffered_deltas.append(parse_order_book_delta(wrapped))
+
+                    # Find the correct starting point and verify contiguity
+                    # (TRD §6.1 steps 4-6). Any failure -> re-fetch and retry.
+                    try:
+                        ordered_deltas = reconcile(snapshot, buffered_deltas)
+                    except ValueError as e:
+                        logger.warning(
+                            "order_book_reconciliation_failed_retrying",
+                            symbol=symbol,
+                            error=str(e),
+                        )
+                        continue  # re-enter outer loop: fresh connect + fresh snapshot
+
+                    await queue.put(snapshot)
+                    last_update_id = snapshot.last_update_id
+                    for delta in ordered_deltas:
+                        await queue.put(delta)
+                        last_update_id = delta.final_update_id
+
+                    logger.info("order_book_live", symbol=symbol, last_update_id=last_update_id)
+
+                    # Now "live" — forward each new delta, verifying it
+                    # connects exactly to the previous one.
                     async for raw_message in ws:
-                        try:
-                            raw = json.loads(raw_message)
-                        except json.JSONDecodeError:
-                            logger.warning("book_invalid_json", raw=raw_message)
-                            continue
+                        raw = json.loads(raw_message)
+                        wrapped = {"stream": f"{symbol.lower()}@depth", "data": raw}
+                        delta = parse_order_book_delta(wrapped)
 
-                        try:
-                            delta = parse_order_book_delta(raw)
-                        except Exception as e:
-                            logger.error("book_parse_failed", error=str(e))
-                            continue
-
-                        # --- Reconciling ---
-                        if book is None:
-                            buffer.append(delta)
-
-                            # Fetch the snapshot exactly once. Re-fetching on
-                            # every failed reconcile is a trap: each new snapshot
-                            # is newer than the buffered deltas, so they all get
-                            # filtered out and reconciliation never succeeds.
-                            if snapshot is None:
-                                snapshot = await fetch_snapshot(symbol)
-
-                            try:
-                                ordered = reconcile(snapshot, buffer)
-                            except ValueError:
-                                # Not bridgeable yet — keep buffering. Only
-                                # re-snapshot if the buffer runs away, meaning
-                                # the snapshot is genuinely stale.
-                                if len(buffer) > MAX_BUFFER_BEFORE_RESNAPSHOT:
-                                    logger.warning(
-                                        "book_snapshot_stale_refetching", symbol=symbol
-                                    )
-                                    snapshot = None
-                                    buffer = []
-                                continue
-
-                            book = OrderBook.from_snapshot(snapshot)
-                            for d in ordered:
-                                book.apply(d)
-                            book.mark_live()
-                            buffer = []
-                            logger.info(
-                                "book_reconciled",
+                        if delta.first_update_id != last_update_id + 1:
+                            logger.warning(
+                                "order_book_gap_detected_reconciling",
                                 symbol=symbol,
-                                last_update_id=book.last_update_id,
-                                depth=book.depth(),
+                                expected=last_update_id + 1,
+                                got=delta.first_update_id,
                             )
-                            yield ordered[-1], book
-                            continue
+                            break  # exit inner loop -> full reconciliation restarts
 
-                        # --- Live: apply with contiguity enforcement ---
-                        try:
-                            book.apply(delta)
-                            yield delta, book
-                        except ValueError as e:
-                            logger.error(
-                                "book_sequence_gap_resyncing", symbol=symbol, error=str(e)
-                            )
-                            book = None
-                            snapshot = None
-                            buffer = [delta]
+                        await queue.put(delta)
+                        last_update_id = delta.final_update_id
 
             except (websockets.exceptions.ConnectionClosed, OSError) as e:
                 logger.warning(
-                    "book_stream_disconnected_retrying",
+                    "order_book_disconnected_retrying",
                     symbol=symbol,
                     error=str(e),
                     backoff_seconds=backoff,

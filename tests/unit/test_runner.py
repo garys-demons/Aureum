@@ -22,7 +22,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 import services.market_data.runner as runner_module
 from core.persistence.models import AuditCategory, Base
 from core.persistence.repository import get_recent
-from services.market_data.models import Candle, TradeEvent
+from services.market_data.models import Candle, OrderBookDelta, OrderBookSnapshot, PriceLevel, SnapshotSource, TradeEvent
 
 
 def make_trade(trade_id: int, price: float = 65000.5) -> TradeEvent:
@@ -180,6 +180,67 @@ async def test_trade_events_unaffected_by_is_closed_filter(test_session_factory)
     """Sanity check: TradeEvent has no is_closed attribute at all, so the
     filter must not accidentally drop non-candle events."""
     events = [make_trade(1), make_trade(2)]
+
+    await _run_with_fake_data(events, test_session_factory)
+
+    async with test_session_factory() as session:
+        rows = await get_recent(session, category=AuditCategory.EVENT)
+    assert len(rows) == 2
+
+
+def make_order_book_snapshot(last_update_id: int = 500) -> OrderBookSnapshot:
+    """A real, valid OrderBookSnapshot — same shape the unified
+    stream_market_data() now yields for order book events (Phase 2
+    unified-stream merge)."""
+    return OrderBookSnapshot(
+        event_type="depth_snapshot", exchange="binance", symbol="BTCUSDT",
+        event_time=1_700_000_000_000, received_time=1_700_000_000_010,
+        last_update_id=last_update_id, snapshot_time=1_700_000_000_000,
+        source=SnapshotSource.RECONCILED,
+        bids=[PriceLevel(price=99.0, quantity=1.0)],
+        asks=[PriceLevel(price=101.0, quantity=1.0)],
+    )
+
+
+def make_order_book_delta(first_id: int, final_id: int) -> OrderBookDelta:
+    return OrderBookDelta(
+        event_type="depth_update", exchange="binance", symbol="BTCUSDT",
+        event_time=1_700_000_001_000, received_time=1_700_000_001_010,
+        first_update_id=first_id, final_update_id=final_id,
+        bids=[PriceLevel(price=99.0, quantity=1.5)], asks=[],
+    )
+
+
+async def test_order_book_events_persist_through_unified_stream(test_session_factory):
+    """
+    Phase 2 unified-stream merge: order book events used to arrive
+    through a SEPARATE event_source (adapter.stream_order_book(), run
+    as its own _consume() task in runner.py). Now they're mixed into
+    the same stream_market_data() feed as ticker/trade/candle. This
+    confirms the single consumer correctly persists them without any
+    special-case handling needed.
+    """
+    events = [
+        make_trade(1),
+        make_order_book_snapshot(500),
+        make_order_book_delta(501, 501),
+        make_trade(2),
+    ]
+
+    await _run_with_fake_data(events, test_session_factory)
+
+    async with test_session_factory() as session:
+        rows = await get_recent(session, category=AuditCategory.EVENT)
+    assert len(rows) == 4
+    event_types = sorted(r.event_type for r in rows)
+    assert event_types == ["depth_snapshot", "depth_update", "trade", "trade"]
+
+
+async def test_order_book_events_unaffected_by_is_closed_filter(test_session_factory):
+    """Sanity check: neither OrderBookSnapshot nor OrderBookDelta have an
+    is_closed attribute, so the candle-specific filter must not
+    accidentally drop them (same style as the existing trade check)."""
+    events = [make_order_book_snapshot(500), make_order_book_delta(501, 501)]
 
     await _run_with_fake_data(events, test_session_factory)
 

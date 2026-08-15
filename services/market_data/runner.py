@@ -6,8 +6,8 @@ Connects Hansika's live data pipeline to the persistence layer.
 Batching note: an earlier version opened a new session and committed
 once per event. At ~3s per DB round-trip that could not keep pace with
 the stream, so lag compounded (~3s added per event, reaching 55s within
-minutes). This version reuses one session per consumer and commits in
-batches (Samarth's fix, fix/batch-persistence-writes).
+minutes). This version reuses one session and commits in batches
+(Samarth's fix, fix/batch-persistence-writes).
 
 Shutdown-flush note: the batched version's flush() silently swallowed
 commit failures — on failure it rolled back and returned as if nothing
@@ -18,12 +18,19 @@ flush now writes the pending rows to a local JSON-lines fallback file.
 Regular in-stream flushes still just log and continue (Aryan's fix,
 fix/shutdown-flush-fallback).
 
-Concurrency note: market data (trade/ticker) and the order book run as
-two independent tasks on separate WebSocket connections and separate DB
-sessions. This is what TRD §6.2 / FR-12 require — a book-stream
-reconnect triggers reconciliation without interrupting trade/ticker
-flow. Each task catches its own exceptions so one failing stream never
-takes the other down.
+Concurrency note (updated for the Phase 2 unified-stream merge):
+market data (ticker/trade/candle) and the order book used to run as
+two separate top-level tasks HERE in runner.py, each with its own
+session. That's no longer how it works — BinanceAdapter.stream_market_data()
+now runs both internally (as its own separate asyncio tasks, each with
+independent reconnect/backoff) and merges everything onto one shared
+queue, yielding it all through a single async generator. FR-12
+(a book-stream failure must not interrupt ticker/trade) is now enforced
+INSIDE the adapter, not by runner.py running separate consumers — see
+BinanceAdapter._run_order_book_stream's own try/except/backoff loop.
+runner.py's job is simpler now: consume that one merged stream and
+persist whatever comes out of it, regardless of which original stream
+it came from.
 
 Run with:
     python -m services.market_data.runner
@@ -112,9 +119,16 @@ async def _consume(event_source, stream_name: str):
     """
     Shared batching/persistence loop.
 
-    event_source is an async iterator yielding MarketEvent models. Each
-    consumer gets its own session — SQLAlchemy sessions are not safe to
-    share across concurrent tasks.
+    event_source is an async iterator yielding MarketEvent models — as
+    of the Phase 2 unified-stream merge, this is a SINGLE merged stream
+    carrying ticker/trade/candle AND order book snapshot/delta events
+    together (previously order book was a separate event_source with
+    its own call to this function). No per-type branching is needed
+    here: every event type sets its own event_type/event_time, and
+    stage_event() already validates each one against the right Pydantic
+    model based on that (see core/persistence/repository.py's
+    EVENT_TYPE_MODEL_MAP — "depth_snapshot"/"depth_update" for order
+    book events, alongside "ticker"/"trade"/"kline").
     """
     pending_rows = []
     last_flush = time.monotonic()
@@ -128,9 +142,10 @@ async def _consume(event_source, stream_name: str):
                 # in-progress update would flood the audit trail with
                 # near-duplicate rows for no real benefit once the bar
                 # closes with the final OHLCV values, so only closed bars
-                # get saved. Ticker/trade/depth events have no is_closed
-                # attribute at all, so getattr(..., True) is a no-op for
-                # them — this only actually filters candles.
+                # get saved. Every other event type (ticker/trade/depth
+                # snapshot/depth delta) has no is_closed attribute at all,
+                # so getattr(..., True) is a no-op for them — this only
+                # actually filters candles.
                 if not getattr(event, "is_closed", True):
                     continue
 
@@ -159,7 +174,6 @@ async def _consume(event_source, stream_name: str):
             log.info("consumer_cancelled", stream=stream_name)
             raise
         except Exception as e:
-            # One stream failing must not take the other down (FR-12).
             log.error("consumer_failed", stream=stream_name, error=str(e), exc_info=True)
         finally:
             # The task may already be cancelled here, in which case a bare
@@ -176,39 +190,25 @@ async def _consume(event_source, stream_name: str):
             log.info("consumer_stopped", stream=stream_name)
 
 
-async def _book_events(adapter, symbol: str):
-    """Adapt stream_order_book's (delta, book) tuples to bare delta events."""
-    async for delta, book in adapter.stream_order_book(symbol):
-        yield delta
-
-
 async def run():
+    """
+    Single consumer against the unified stream_market_data() feed.
+
+    Before the Phase 2 unified-stream merge, this ran TWO separate
+    _consume() tasks — one for market data, one for the order book,
+    each connecting and reconnecting independently. That's no longer
+    needed: BinanceAdapter now does that internal separation itself
+    (see the module docstring), so there is only one event_source to
+    consume here.
+    """
     configure_logging()
     symbols = load_symbols()
     adapter = BinanceAdapter(config={})
     log.info("runner_starting", symbols=symbols, batch_size=BATCH_SIZE)
 
-    tasks = [
-        asyncio.create_task(
-            _consume(adapter.stream_market_data(symbols), "market_data"),
-            name="market_data",
-        ),
-        asyncio.create_task(
-            _consume(_book_events(adapter, symbols[0]), "order_book"),
-            name="order_book",
-        ),
-    ]
+    await _consume(adapter.stream_market_data(symbols), "market_data")
 
-    try:
-        await asyncio.gather(*tasks)
-    except asyncio.CancelledError:
-        log.info("runner_cancelled")
-        for t in tasks:
-            t.cancel()
-        await asyncio.gather(*tasks, return_exceptions=True)
-        raise
-    finally:
-        log.info("runner_stopped")
+    log.info("runner_stopped")
 
 
 if __name__ == "__main__":

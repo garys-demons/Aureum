@@ -3,6 +3,7 @@ import NavBar from './components/NavBar.jsx'
 import Overview from './pages/Overview.jsx'
 import AuditLog from './pages/AuditLog.jsx'
 import Anomalies from './pages/Anomalies.jsx'
+import OrderBook from './pages/OrderBook.jsx'
 import './App.css'
 
 function App() {
@@ -15,6 +16,7 @@ function App() {
             <Route path="/" element={<Overview />} />
             <Route path="/audit-log" element={<AuditLog />} />
             <Route path="/anomalies" element={<Anomalies />} />
+            <Route path="/order-book" element={<OrderBook />} />
           </Routes>
         </main>
       </div>
