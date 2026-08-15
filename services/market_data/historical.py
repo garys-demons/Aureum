@@ -97,4 +97,74 @@ def _parse_raw_kline(raw: list, symbol: str, interval: str) -> Candle:
         volume=float(volume),
         is_closed=True,  # historical candles are always fully closed
     )
-    
+
+
+async def fetch_historical_trades(
+    symbol: str,
+    start_time_ms: int,
+    end_time_ms: int,
+) -> list[TradeEvent]:
+    """
+    Fetch all aggregated trades for `symbol` between start_time_ms and
+    end_time_ms, handling pagination via Binance's aggTrades endpoint.
+    """
+    all_trades: list[TradeEvent] = []
+    current_start = start_time_ms
+
+    async with httpx.AsyncClient() as client:
+        while current_start < end_time_ms:
+            url = f"{BINANCE_TESTNET_REST_BASE}/api/v3/aggTrades"
+            params = {
+                "symbol": symbol,
+                "startTime": current_start,
+                "endTime": end_time_ms,
+                "limit": MAX_CANDLES_PER_REQUEST,
+            }
+
+            response = await client.get(url, params=params)
+            response.raise_for_status()
+            raw_trades = response.json()
+
+            if not raw_trades:
+                break
+
+            for raw in raw_trades:
+                all_trades.append(_parse_raw_agg_trade(raw, symbol))
+
+            # Same safety fix as fetch_historical_candles: a batch smaller
+            # than the limit means there's no more data, stop rather than
+            # re-requesting forever.
+            if len(raw_trades) < MAX_CANDLES_PER_REQUEST:
+                break
+
+            last_trade_time = raw_trades[-1]["T"]
+            current_start = last_trade_time + 1
+
+            logger.info(
+                "fetched_trade_batch",
+                symbol=symbol,
+                batch_size=len(raw_trades),
+                total_so_far=len(all_trades),
+            )
+
+    return all_trades
+
+
+def _parse_raw_agg_trade(raw: dict, symbol: str) -> TradeEvent:
+    """
+    Convert a raw Binance aggTrade object into a TradeEvent.
+
+    Raw format: {"a": agg_trade_id, "p": price, "q": quantity, "T": timestamp, "m": buyer_is_maker, ...}
+    """
+    return TradeEvent(
+        event_type="trade",
+        exchange="binance",
+        symbol=symbol,
+        event_time=raw["T"],
+        received_time=raw["T"],
+        trade_id=raw["a"],
+        price=float(raw["p"]),
+        quantity=float(raw["q"]),
+        buyer_maker=raw["m"],
+        trade_time=raw["T"],
+    )

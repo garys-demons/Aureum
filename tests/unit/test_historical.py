@@ -86,3 +86,85 @@ async def test_fetch_historical_candles_paginates_correctly():
 
     assert len(candles) == MAX_CANDLES_PER_REQUEST + 2
     assert route.call_count == 2
+    
+from services.market_data.historical import fetch_historical_trades, _parse_raw_agg_trade
+from services.market_data.models import TradeEvent
+
+
+def sample_raw_agg_trade(trade_id=1000, timestamp=1700000000000):
+    """A realistic fake Binance aggTrade object."""
+    return {
+        "a": trade_id,
+        "p": "50000.50",
+        "q": "0.01",
+        "f": 100,
+        "l": 100,
+        "T": timestamp,
+        "m": True,
+        "M": True,
+    }
+
+
+def test_parse_raw_agg_trade_returns_trade_event():
+    raw = sample_raw_agg_trade()
+    trade = _parse_raw_agg_trade(raw, symbol="BTCUSDT")
+
+    assert isinstance(trade, TradeEvent)
+    assert trade.symbol == "BTCUSDT"
+    assert trade.trade_id == 1000
+    assert trade.price == 50000.50
+    assert trade.buyer_maker is True
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_fetch_historical_trades_single_batch():
+    """A date range small enough for one request should return all trades, no pagination needed."""
+    raw_trades = [
+        sample_raw_agg_trade(trade_id=1000 + i, timestamp=1700000000000 + i * 1000)
+        for i in range(5)
+    ]
+
+    respx.get("https://testnet.binance.vision/api/v3/aggTrades").mock(
+        return_value=httpx.Response(200, json=raw_trades)
+    )
+
+    trades = await fetch_historical_trades(
+        symbol="BTCUSDT",
+        start_time_ms=1700000000000,
+        end_time_ms=1700000010000,
+    )
+
+    assert len(trades) == 5
+    assert all(isinstance(t, TradeEvent) for t in trades)
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_fetch_historical_trades_paginates_correctly():
+    """A full first batch should trigger a second request; a smaller final batch should stop the loop."""
+    from services.market_data.historical import MAX_CANDLES_PER_REQUEST
+
+    batch_1 = [
+        sample_raw_agg_trade(trade_id=1000 + i, timestamp=1700000000000 + i * 1000)
+        for i in range(MAX_CANDLES_PER_REQUEST)
+    ]
+    batch_2 = [
+        sample_raw_agg_trade(trade_id=1000 + MAX_CANDLES_PER_REQUEST + i, timestamp=1700000000000 + (MAX_CANDLES_PER_REQUEST + i) * 1000)
+        for i in range(3)
+    ]
+
+    route = respx.get("https://testnet.binance.vision/api/v3/aggTrades")
+    route.side_effect = [
+        httpx.Response(200, json=batch_1),
+        httpx.Response(200, json=batch_2),
+    ]
+
+    trades = await fetch_historical_trades(
+        symbol="BTCUSDT",
+        start_time_ms=1700000000000,
+        end_time_ms=1700000000000 + (MAX_CANDLES_PER_REQUEST + 10) * 1000,
+    )
+
+    assert len(trades) == MAX_CANDLES_PER_REQUEST + 3
+    assert route.call_count == 2
