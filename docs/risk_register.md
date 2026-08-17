@@ -36,6 +36,7 @@ Running log of risks, gaps, and issues found during review. Owned by Review & Ri
 | 2026-08-12 | `services/market_data` | FR-6: kline stream never subscribed — same dead-code pattern order_book had | High | Fixed (PR #22, Aryan) |
 | 2026-08-13 | Process | PR #21's commit message ("risk register cleanup") didn't actually touch `risk_register.md` — real fixes existed in code but weren't reflected here for two days | Low | Fixed — this update |
 | 2026-08-15 | Process | `git push` silently failed after committing the order-book restore fix, leaving `dev` broken for hours. Hansika, Aryan, and Samarth each independently ran diagnostics before discovering the root cause: the push simply hadn't gone through (confirmed via `git branch -vv` showing "ahead 1"). No error was visible in the original session's output | Medium | Fixed — pushed successfully; process gap remains. Team should verify every push with `git log origin/<branch> --oneline -3` before telling anyone something's fixed, rather than trusting silent success |
+| 2026-08-17 | Gauri feature engine | `rolling_volatility()` and `rsi()` don't document which output index corresponds to which input timestamp — a downstream consumer naively aligning `output[0]` with `input[0]` would introduce look-ahead bias, since `output[0]` is actually computed using data through index `window-1`. Not a math bug, an unstated alignment contract | Medium | Open |
 
 ---
 
