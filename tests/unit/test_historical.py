@@ -1,4 +1,5 @@
 """Unit tests for historical candle downloader (Phase 3)."""
+import time
 import httpx
 import pytest
 import respx
@@ -208,3 +209,51 @@ def test_interval_to_ms_known_values():
 def test_interval_to_ms_unknown_raises():
     with pytest.raises(ValueError):
         interval_to_ms("3d")
+        
+@pytest.mark.asyncio
+@respx.mock
+async def test_fetch_historical_candles_marks_in_progress_candle_not_closed():
+    """If the last candle's close_time hasn't happened yet in real time,
+    it must be marked is_closed=False, not hardcoded True."""
+    now_ms = int(time.time() * 1000)
+    in_progress = sample_raw_kline(open_time=now_ms - 30000)
+    in_progress[6] = now_ms + 30000  # close_time in the future
+
+    respx.get("https://testnet.binance.vision/api/v3/klines").mock(
+        return_value=httpx.Response(200, json=[in_progress])
+    )
+
+    candles = await fetch_historical_candles(
+        symbol="BTCUSDT", interval="1m",
+        start_time_ms=now_ms - 60000, end_time_ms=now_ms + 60000,
+    )
+
+    assert candles[-1].is_closed is False
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_fetch_historical_candles_keeps_past_candle_closed():
+    """A candle whose close_time is genuinely in the past should stay is_closed=True."""
+    raw = sample_raw_kline(open_time=1700000000000)  # far in the past
+
+    respx.get("https://testnet.binance.vision/api/v3/klines").mock(
+        return_value=httpx.Response(200, json=[raw])
+    )
+
+    candles = await fetch_historical_candles(
+        symbol="BTCUSDT", interval="1m",
+        start_time_ms=1700000000000, end_time_ms=1700000060000,
+    )
+
+    assert candles[-1].is_closed is True
+
+
+def test_find_candle_gaps_does_not_misreport_duplicate_as_gap():
+    """A duplicate open_time is not a gap - must not be flagged as one."""
+    candles = [
+        make_test_candle(1700000000000),
+        make_test_candle(1700000000000),  # exact duplicate
+    ]
+    gaps = find_candle_gaps(candles, interval_ms=60000)
+    assert gaps == []

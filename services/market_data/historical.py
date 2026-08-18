@@ -1,9 +1,11 @@
 """
-Historical data downloader — REST-based, for backtesting/feature-pipeline
-inputs (Phase 3). Distinct from the live WebSocket pipeline (Phase 1) —
+Historical data downloader - REST-based, for backtesting/feature-pipeline
+inputs (Phase 3). Distinct from the live WebSocket pipeline (Phase 1) -
 reuses the same Candle/TradeEvent models so downstream code doesn't care
 whether data came from live streaming or historical backfill.
 """
+import time
+
 import httpx
 import structlog
 
@@ -51,7 +53,7 @@ async def fetch_historical_candles(
                 all_candles.append(_parse_raw_kline(raw, symbol, interval))
 
             # A batch smaller than the request limit means Binance has no
-            # more data in this range — stop, rather than re-requesting
+            # more data in this range - stop, rather than re-requesting
             # forever (this was a real infinite-loop bug, caught by a test
             # whose mock returns the same fixed batch every call).
             if len(raw_candles) < MAX_CANDLES_PER_REQUEST:
@@ -69,6 +71,17 @@ async def fetch_historical_candles(
                 batch_size=len(raw_candles),
                 total_so_far=len(all_candles),
             )
+
+    # Binance can return the still-forming current candle as the last item
+    # if end_time_ms is close to (or past) the real current time. Its
+    # close_time hasn't actually happened yet, so it must not be labeled
+    # closed - treating a still-changing price as final would corrupt
+    # anything downstream that assumes closed candles never change
+    # (Samarth's Phase 3 review finding).
+    if all_candles:
+        now_ms = int(time.time() * 1000)
+        if all_candles[-1].close_time >= now_ms:
+            all_candles[-1] = all_candles[-1].model_copy(update={"is_closed": False})
 
     return all_candles
 
@@ -95,7 +108,7 @@ def _parse_raw_kline(raw: list, symbol: str, interval: str) -> Candle:
         low=float(low),
         close=float(close),
         volume=float(volume),
-        is_closed=True,  # historical candles are always fully closed
+        is_closed=True,  # corrected after the fact in fetch_historical_candles if still in-progress
     )
 
 
@@ -168,21 +181,27 @@ def _parse_raw_agg_trade(raw: dict, symbol: str) -> TradeEvent:
         buyer_maker=raw["m"],
         trade_time=raw["T"],
     )
-    
+
+
 def find_candle_gaps(candles: list[Candle], interval_ms: int) -> list[tuple[int, int]]:
     """
     Scan a list of candles (assumed sorted by open_time) and return any
-    gaps found — pairs of (expected_next_open_time, actual_open_time)
+    gaps found - pairs of (expected_next_open_time, actual_open_time)
     where consecutive candles aren't exactly interval_ms apart.
 
-    interval_ms: the expected spacing between candles, e.g. 60_000 for "1m".
+    Duplicate open_time values are skipped, not reported as gaps -
+    a repeated candle isn't missing data, it's a separate (low-priority)
+    concern (Samarth's Phase 3 review finding).
     """
     gaps = []
     for prev, curr in zip(candles, candles[1:]):
+        if curr.open_time == prev.open_time:
+            continue  # duplicate, not a gap
         expected_next = prev.open_time + interval_ms
         if curr.open_time != expected_next:
             gaps.append((expected_next, curr.open_time))
     return gaps
+
 
 INTERVAL_TO_MS = {
     "1m": 60_000,
