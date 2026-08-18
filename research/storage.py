@@ -129,7 +129,7 @@ def save_dataset(
 
     version = _next_version(category, name)
     version_dir = _dataset_dir(category, name) / f"v{version}"
-    version_dir.mkdir(parents=True, exist_ok=True)
+    version_dir.mkdir(parents=True, exist_ok=False)
 
     data_path = version_dir / "data.parquet"
     df.to_parquet(data_path, index=False)
