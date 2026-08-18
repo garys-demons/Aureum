@@ -84,6 +84,26 @@ def test_rolling_volatility_raises_on_window_too_small():
     with pytest.raises(ValueError):
         rolling_volatility([0.01, 0.02, 0.03], window=1)
 
+def test_rolling_volatility_alignment_is_window_minus_one():
+    """
+    Proves result[0] corresponds to index (window - 1) in the returns
+    list, not index 0 — locks in the alignment documented in the
+    docstring so a future refactor can't silently break it.
+    """
+    returns = [0.01, -0.02, 0.03, 0.01, 0.02]
+    window = 3
+    result = rolling_volatility(returns, window)
+
+    # result[0] should be the std dev of returns[0:3] — i.e. "as of" 
+    # returns[window - 1] = returns[2], not returns[0]
+    manual_first_chunk = returns[0:window]
+    mean = sum(manual_first_chunk) / window
+    variance = sum((r - mean) ** 2 for r in manual_first_chunk) / (window - 1)
+    expected_first_value = variance ** 0.5
+
+    assert result[0] == expected_first_value
+    # explicitly documenting: this value represents index (window - 1) = 2
+
 def test_rsi_hand_calculated():
     # prices -> changes: [1, 1, -1, 2, -1] (window = 5, all changes used)
     prices = [100, 101, 102, 101, 103, 102]
@@ -119,6 +139,28 @@ def test_rsi_raises_on_invalid_window():
     import pytest
     with pytest.raises(ValueError):
         rsi([100, 101, 102], window=0)
+
+def test_rsi_alignment_corresponds_to_price_index_window():
+    """
+    Proves result[0] corresponds to price index `window` (not window - 1,
+    since changes are offset by 1 from prices) — locks in the alignment
+    documented in the docstring so a future refactor can't silently break it.
+    """
+    prices = [100, 101, 102, 101, 103, 102]
+    window = 5
+    result = rsi(prices, window)
+
+    # result[0] should be computed from changes[0:5], i.e. prices[0:6] —
+    # representing RSI "as of" price index 5 (window), not index 0
+    manual_changes = [prices[i] - prices[i - 1] for i in range(1, 6)]
+    manual_gains = [c for c in manual_changes if c > 0]
+    manual_losses = [-c for c in manual_changes if c < 0]
+    avg_gain = sum(manual_gains) / window
+    avg_loss = sum(manual_losses) / window
+    expected_first_value = 100 - (100 / (1 + avg_gain / avg_loss))
+
+    assert result[0] == expected_first_value
+    # explicitly documenting: this value represents price index window = 5
 
 def _make_book(bids: dict, asks: dict) -> OrderBook:
     book = OrderBook(symbol="BTCUSDT")
