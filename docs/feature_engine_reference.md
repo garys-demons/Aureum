@@ -22,6 +22,12 @@ How much the price has been jumping around recently, not the direction — just 
 Uses *sample* standard deviation (divides by window size minus 1), the standard
 convention for estimating volatility from a sample of returns.
 
+**Alignment:** `result[i]` corresponds to the window *ending* at index 
+`(i + window - 1)` in the input, not starting at index `i`. When aligning 
+this output against a price/return series, offset by `(window - 1)` — 
+otherwise a value gets attached to an earlier timestamp than the data it 
+was actually computed from.
+
 ## RSI (Relative Strength Index)
 
 Standard technical indicator, 0-100, answering: "lately, has the price been rising
@@ -32,6 +38,15 @@ more than falling?"
 4. `RSI = 100 - (100 / (1 + RS))`
 
 Close to 100 = mostly rising recently. Close to 0 = mostly falling. Around 50 = balanced.
+
+**Alignment:** `result[i]` corresponds to price-change index `(i + window - 1)`,
+which is price index `(i + window)` — **not** `(i + window - 1)` in the original
+price series, since price changes are already offset by 1 from prices (change[0]
+is the difference between price[0] and price[1]). When aligning this output
+against the original price series, offset by `window`, not `window - 1` —
+otherwise a value gets attached to an earlier timestamp than the data it was
+actually computed from. This differs slightly from Rolling Volatility's offset
+because RSI operates on derived changes, not raw prices directly.
 
 ## Historical Spread
 

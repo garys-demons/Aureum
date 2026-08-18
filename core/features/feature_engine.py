@@ -48,6 +48,14 @@ def rolling_volatility(returns: list[float], window: int) -> list[float]:
     Rolling realized volatility: standard deviation of returns over a
     sliding window of size `window`.
 
+    ALIGNMENT: result[i] corresponds to the window ending at return index
+    (i + window - 1), NOT starting at index i. E.g. with window=5,
+    result[0] is computed from returns[0:5], so it represents the
+    volatility "as of" returns[4] — not returns[0]. Anyone aligning this
+    output against a price/return series must offset by (window - 1),
+    or they will attach a volatility figure to an earlier timestamp than
+    the data it was actually computed from — a look-ahead bug.
+
     Given N returns, produces N - window + 1 volatility values — one per
     window position, starting from the first full window (never a
     partial one, since a partial window would silently compute
@@ -77,6 +85,15 @@ def rolling_volatility(returns: list[float], window: int) -> list[float]:
 def rsi(prices: list[float], window: int = 14) -> list[float]:
     """
     Relative Strength Index — standard momentum oscillator, 0-100.
+
+    ALIGNMENT: result[i] corresponds to the window ending at price-change index
+    (i + window - 1), NOT starting at index i. E.g. with window=5, result[0]
+    is computed from changes[0:5] (derived from prices[0:6]), so it represents
+    the RSI "as of" price index 5 — not price index 0. Anyone aligning this
+    output against a price series must offset by window (not window - 1,
+    since changes are already offset by 1 from prices), or they will attach
+    an RSI figure to an earlier timestamp than the data it was actually
+    computed from — a look-ahead bug.
 
     Given N prices, first computes N-1 price changes, then produces
     (N-1) - window + 1 RSI values, one per full window of changes.
