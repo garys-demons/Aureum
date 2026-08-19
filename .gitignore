@@ -14,3 +14,5 @@ data/processed/*
 check_db.py 
 clear_audit.py 
 failed_batches/
+test_book.py
+check_dupes.py
