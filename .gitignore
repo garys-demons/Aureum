@@ -8,8 +8,10 @@ venv/
 .ruff_cache/
 data/raw/*
 data/processed/*
+data/results/*
 !data/raw/.gitkeep
 !data/processed/.gitkeep
+!data/results/.gitkeep
 .DS_Store
 check_db.py 
 clear_audit.py 
