@@ -41,6 +41,7 @@ Running log of risks, gaps, and issues found during review. Owned by Review & Ri
 | 2026-08-17 | Hansika historical.py | `find_candle_gaps` can't distinguish a duplicate open_time from a real gap | Low | Open |
 | 2026-08-17 | Aryan research/storage.py | Race condition in save_dataset — _next_version() read and the version directory creation aren't atomic, so two concurrent saves for the same dataset could silently overwrite each other. Fix: mkdir(exist_ok=False) | Medium | Open |
 | 2026-08-17 | Aryan research/storage.py | load_dataset(version="latest") isn't pinned — re-running the same code later can silently load different underlying data if a new version was saved in between, undermining reproducibility. Worth requiring explicit version pins in feature-computation code | Low | Open |
+| 2026-08-19 | Hansika backtest engine | Engine's `_update_order_book()` calls `OrderBook.apply_delta()` with no contiguity check, despite `order_book_state.py`'s own docstring stating `apply_delta()` trusts the caller to have already verified it. A sequence gap in historical data would silently corrupt book state for the rest of a backtest run, with strategy decisions based on wrong data and no error surfaced | High | Open |
 
 ---
 
