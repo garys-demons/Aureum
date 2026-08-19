@@ -22,15 +22,31 @@ one.
 `data/raw/` and `data/processed/` already existed as gitignored paths
 in `.gitignore` before this task — that convention is followed here
 rather than inventing a separate `research/data/` location.
+`data/results/` was added the same way in Phase 4, for backtest run
+outputs.
+
+Phase 4 also adds:
+- `core/portfolio/portfolio.py` — Portfolio/PnL tracking. Lives in
+  `core/`, not `research/`, deliberately — it's pure state logic with
+  no file I/O and no dependency on this module, so it stays safe to
+  import from anywhere (including a future live/paper-trading use, not
+  just backtesting).
+- `research/backtest/results.py` — persists a *completed* Portfolio's
+  results using `save_dataset()` below. This is where the actual call
+  into `research/storage.py` happens, since `core/portfolio/` itself
+  is never allowed to import from `research/` (see the boundary rule
+  above) — `core/portfolio/portfolio.py` explains this split in more
+  detail if you're wiring the two together.
 
 ## Dataset storage — `research/storage.py`
 
 Every dataset is versioned, never overwritten. Saving always creates
 a new version; nothing is ever silently replaced. Each dataset also
 has a `category` — `"raw"` for unmodified source data (Hansika's
-historical downloads) or `"processed"` for derived data (Gauri's
-computed features) — matching the existing `data/raw`/`data/processed`
-split.
+historical downloads), `"processed"` for derived data (Gauri's
+computed features), or `"results"` for completed backtest run outputs
+(Phase 4) — matching the existing `data/raw`/`data/processed`/
+`data/results` split.
 
 ```python
 from research.storage import save_dataset, load_dataset, list_versions
@@ -51,6 +67,17 @@ save_dataset(
     category="processed",
     source="gauri/feature_engine",
     metadata={"computed_from": "btcusdt_candles_1m v3"},
+)
+
+# Saving backtest results (Phase 4) — usually via
+# research/backtest/results.py's save_backtest_run() instead of calling
+# save_dataset() directly, see that file for the full helper
+save_dataset(
+    "my_run_summary",
+    summary_df,
+    category="results",
+    source="core.portfolio",
+    metadata={"run_name": "my_run", "strategy_name": "stub_strategy"},
 )
 
 # Loading (defaults to the latest version)
@@ -79,11 +106,12 @@ this reason.
 
 ## Where the actual data lives
 
-`data/raw/` and `data/processed/` are gitignored — dataset files
-(especially historical tick data) can get large, and don't belong in
-git history. `research/storage.py` and this README are what's
-tracked; the data itself is generated locally by running the
-downloaders/feature pipelines.
+`data/raw/`, `data/processed/`, and `data/results/` are gitignored —
+dataset files (especially historical tick data and full backtest
+trade logs) can get large, and don't belong in git history.
+`research/storage.py` and this README are what's tracked; the data
+itself is generated locally by running the downloaders/feature
+pipelines/backtests.
 
 ## notebooks/ vs experiments/
 
