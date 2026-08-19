@@ -29,9 +29,11 @@ that instead of introducing a separate location:
     data/<category>/<name>/<version>/manifest.json
 
 category is "raw" for Hansika's historical downloads (unmodified
-source data) or "processed" for Gauri's computed features (derived
-from raw data). Both are gitignored — dataset files, especially tick
-data, don't belong in git history; only this module and the folder
+source data), "processed" for Gauri's computed features (derived
+from raw data), or "results" for completed backtest run outputs
+(Phase 4 — trade logs, equity curves, summary metrics). All three are
+gitignored — dataset files, especially tick data and backtest history,
+don't belong in git history; only this module and the folder
 structure itself are tracked.
 
 Saving never overwrites an existing version — it always creates the
@@ -67,7 +69,7 @@ import pandas as pd
 REPO_ROOT = Path(__file__).parent.parent
 DATA_ROOT = REPO_ROOT / "data"
 
-Category = Literal["raw", "processed"]
+Category = Literal["raw", "processed", "results"]
 
 
 def _dataset_dir(category: Category, name: str) -> Path:
