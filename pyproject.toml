@@ -15,6 +15,8 @@ dependencies = [
     "python-dotenv>=1.0",
     "python-binance>=1.0.19",
     "greenlet>=3.0",
+    "pandas>=2.0",
+    "pyarrow>=14.0",
 ]
 
 [project.optional-dependencies]
@@ -23,6 +25,12 @@ dev = [
     "pytest-asyncio>=0.23",
     "ruff>=0.4",
     "aiosqlite>=0.20",
+    "respx>=0.20",
+]
+research = [
+    "pandas>=2.2",
+    "pyarrow>=16.0",
+    "numpy>=1.26",
 ]
 
 [tool.pytest.ini_options]
@@ -34,4 +42,4 @@ requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
-include = ["apps*", "core*", "infra*", "config*", "services*"]
+include = ["apps*", "core*", "infra*", "config*", "services*", "research*"]
