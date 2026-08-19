@@ -11,6 +11,7 @@ one at a time, in chronological order, and the strategy is only ever
 given data derived from events up to and including the current one.
 """
 from typing import Union
+from services.market_data.order_book_state import OrderBook
 
 from core.strategy.base import StrategyInterface, Signal
 from services.market_data.models import Candle, TradeEvent, OrderBookDelta, OrderBookSnapshot
@@ -51,6 +52,7 @@ class BacktestEngine:
     def __init__(self, strategy: StrategyInterface):
         self.strategy = strategy
         self.signals: list[Signal] = []
+        self._order_book: OrderBook | None = None
 
     def run(self, events: list[HistoricalEvent]) -> list[Signal]:
         """
@@ -62,13 +64,21 @@ class BacktestEngine:
         sorted_events = sort_events_chronologically(events)
         self.signals = []
 
+
         for event in sorted_events:
+            self._update_order_book(event)
             market_data = self._build_market_data(event)
             signal = self.strategy.decide(market_data)
             self.signals.append(signal)
-
         return self.signals
-
+    
+    def _update_order_book(self, event: HistoricalEvent) -> None:
+            
+         if isinstance(event, OrderBookSnapshot):
+            self._order_book = OrderBook(event)
+         elif isinstance(event, OrderBookDelta) and self._order_book is not None:
+            self._order_book.apply_delta(event)
+ 
     def _build_market_data(self, event: HistoricalEvent) -> dict:
         """
         Convert a single historical event into the market_data dict
@@ -80,6 +90,10 @@ class BacktestEngine:
             "timestamp": _event_timestamp(event),
             "event_type": event.event_type,
         }
+
+        if self._order_book is not None:
+            market_data["order_book_best_bid"] = self._order_book.best_bid
+            market_data["order_book_best_ask"] = self._order_book.best_ask
 
         if isinstance(event, Candle):
             market_data["price"] = event.close

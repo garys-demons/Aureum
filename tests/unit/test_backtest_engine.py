@@ -130,3 +130,33 @@ def test_candle_ordered_by_close_time_not_open_time():
     # even though the candle's open_time (100) is earlier than the trade.
     assert sorted_events[0] is trade
     assert sorted_events[1] is candle
+
+
+def test_order_book_state_updates_as_events_process():
+    """Order book state should build up from snapshot + deltas, and be
+    visible in market_data for subsequent events."""
+    from services.market_data.models import OrderBookSnapshot, OrderBookDelta, PriceLevel, SnapshotSource
+
+    snapshot = OrderBookSnapshot(
+        event_type="depth_snapshot", exchange="binance", symbol="BTCUSDT",
+        event_time=100, received_time=100, last_update_id=1,
+        bids=[PriceLevel(price=50000, quantity=1.0)],
+        asks=[PriceLevel(price=50001, quantity=1.0)],
+        snapshot_time=100, source=SnapshotSource.REST_FULL,
+    )
+    trade = make_trade(1, event_time=200)
+
+    seen_market_data = []
+
+    class RecordingStrategy(StrategyInterface):
+        def decide(self, market_data: dict) -> Signal:
+            seen_market_data.append(dict(market_data))
+            return Signal(action="hold", symbol=market_data["symbol"])
+
+    engine = BacktestEngine(strategy=RecordingStrategy())
+    engine.run([snapshot, trade])
+
+    # The trade event (processed second) should see the order book
+    # state established by the snapshot (processed first).
+    assert seen_market_data[1]["order_book_best_bid"] == 50000
+    assert seen_market_data[1]["order_book_best_ask"] == 50001
