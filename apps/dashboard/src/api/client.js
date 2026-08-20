@@ -25,5 +25,4 @@ export const api = {
   },
   getOverviewStats: () => request('/overview'),
   getOrderBook: (symbol) => request(`/order-book/${symbol}`),
-  getDatasets: () => request('/datasets'),
 }
