@@ -160,3 +160,62 @@ def test_order_book_state_updates_as_events_process():
     # state established by the snapshot (processed first).
     assert seen_market_data[1]["order_book_best_bid"] == 50000
     assert seen_market_data[1]["order_book_best_ask"] == 50001
+    
+def test_engine_raises_on_order_book_gap():
+    """
+    A non-contiguous delta must raise loudly, not silently corrupt book
+    state (Samarth's Phase 4 review finding: OrderBook.apply_delta()
+    trusts the caller to check contiguity; the engine must actually do it).
+    """
+    from services.market_data.models import OrderBookSnapshot, OrderBookDelta, PriceLevel, SnapshotSource
+    from core.strategy.stub_strategy import StubStrategy
+
+    snapshot = OrderBookSnapshot(
+        event_type="depth_snapshot", exchange="binance", symbol="BTCUSDT",
+        event_time=100, received_time=100, last_update_id=10,
+        bids=[PriceLevel(price=50000, quantity=1.0)],
+        asks=[PriceLevel(price=50001, quantity=1.0)],
+        snapshot_time=100, source=SnapshotSource.REST_FULL,
+    )
+    gapped_delta = OrderBookDelta(
+        event_type="depth_update", exchange="binance", symbol="BTCUSDT",
+        event_time=200, received_time=200,
+        first_update_id=15, final_update_id=16,  # gap: expected 11, got 15
+        bids=[], asks=[],
+    )
+
+    engine = BacktestEngine(strategy=StubStrategy())
+
+    with pytest.raises(ValueError, match="Order book gap detected"):
+        engine.run([snapshot, gapped_delta])
+
+
+def test_engine_applies_contiguous_delta_correctly():
+    """A correctly-contiguous delta should apply cleanly, not raise."""
+    from services.market_data.models import OrderBookSnapshot, OrderBookDelta, PriceLevel, SnapshotSource
+
+    snapshot = OrderBookSnapshot(
+        event_type="depth_snapshot", exchange="binance", symbol="BTCUSDT",
+        event_time=100, received_time=100, last_update_id=10,
+        bids=[PriceLevel(price=50000, quantity=1.0)],
+        asks=[PriceLevel(price=50001, quantity=1.0)],
+        snapshot_time=100, source=SnapshotSource.REST_FULL,
+    )
+    contiguous_delta = OrderBookDelta(
+        event_type="depth_update", exchange="binance", symbol="BTCUSDT",
+        event_time=200, received_time=200,
+        first_update_id=11, final_update_id=11,
+        bids=[PriceLevel(price=50000, quantity=5.0)], asks=[],
+    )
+
+    seen_market_data = []
+
+    class RecordingStrategy(StrategyInterface):
+        def decide(self, market_data: dict) -> Signal:
+            seen_market_data.append(dict(market_data))
+            return Signal(action="hold", symbol=market_data["symbol"])
+
+    engine = BacktestEngine(strategy=RecordingStrategy())
+    engine.run([snapshot, contiguous_delta])
+
+    assert seen_market_data[-1]["order_book_best_bid"] == 50000

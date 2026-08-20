@@ -73,10 +73,23 @@ class BacktestEngine:
         return self.signals
     
     def _update_order_book(self, event: HistoricalEvent) -> None:
-            
-         if isinstance(event, OrderBookSnapshot):
+        
+        if isinstance(event, OrderBookSnapshot):
             self._order_book = OrderBook(event)
-         elif isinstance(event, OrderBookDelta) and self._order_book is not None:
+
+        elif isinstance(event, OrderBookDelta):
+            if self._order_book is None:
+                return  # no snapshot yet to apply against
+
+            expected_first_id = self._order_book.last_update_id + 1
+            if event.first_update_id != expected_first_id:
+                raise ValueError(
+                    f"Order book gap detected during backtest: expected "
+                    f"delta.first_update_id={expected_first_id}, got "
+                    f"{event.first_update_id}. Refusing to apply - would "
+                    f"silently corrupt book state for the rest of the run."
+                )
+
             self._order_book.apply_delta(event)
  
     def _build_market_data(self, event: HistoricalEvent) -> dict:
