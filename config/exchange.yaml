@@ -6,7 +6,7 @@ binance:
   rest_base_url: "https://testnet.binance.vision/api"
   ws_base_url: "wss://stream.testnet.binance.vision/ws"
   symbols:
-    - "BTCUSDT"
+    - "ADAUSDT"
   api_key_env: "BINANCE_TESTNET_API_KEY"
   api_secret_env: "BINANCE_TESTNET_API_SECRET"
 
