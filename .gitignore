@@ -17,4 +17,6 @@ check_db.py
 clear_audit.py 
 failed_batches/
 test_book.py
-check_dupes.py
+check_dupes.pycheck_ada_quotes.py 
+check_testnet_liquidity.py 
+check_depth_detail.py 

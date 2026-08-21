@@ -100,13 +100,13 @@ if __name__ == "__main__":
         start_time = end_time - (24 * 60 * 60 * 1000)
 
         candle_version = await download_and_store_candles(
-            symbol="BTCUSDT", interval="1m",
+            symbol="ADAUSDT", interval="1m",
             start_time_ms=start_time, end_time_ms=end_time,
         )
         print(f"Saved candles as version {candle_version}")
 
         trade_version = await download_and_store_trades(
-            symbol="BTCUSDT",
+            symbol="ADAUSDT",
             start_time_ms=end_time - (10 * 60 * 1000),
             end_time_ms=end_time,
         )
