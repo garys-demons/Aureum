@@ -21,7 +21,7 @@ def dataframe_to_candles(df: pd.DataFrame) -> list[Candle]:
 
 
 def main():
-    df = load_dataset("raw", "btcusdt_candles_1m")
+    df = load_dataset("raw", "adausdt_candles_1m")
     candles = dataframe_to_candles(df)
 
     print(f"Loaded {len(candles)} candles from storage")

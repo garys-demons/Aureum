@@ -147,3 +147,28 @@ def test_list_versions_on_empty_dataset_returns_empty_list():
 
 def test_list_datasets_on_empty_store_returns_empty_list():
     assert list_datasets("raw") == []
+
+def test_concurrent_save_raises_instead_of_silently_overwriting(monkeypatch):
+    """
+    Regression: _next_version() and the version-dir creation aren't atomic.
+    A real race can't be reproduced in a single-threaded test by simply
+    pre-creating a directory, since the next call to _next_version() would
+    just see it on disk and skip past it. Instead, this monkeypatches
+    _next_version to return a stale value — as if it had been computed
+    before a concurrent writer's directory existed — and confirms
+    mkdir(exist_ok=False) still catches the resulting collision.
+    """
+    import research.storage as storage_module
+
+    save_dataset("collision_ds", make_df(), category="raw", source="unit_test")
+
+    # A concurrent caller already created v2 on disk.
+    storage_module._dataset_dir("raw", "collision_ds").joinpath("v2").mkdir(parents=True)
+
+    # Force THIS call to compute the same stale version number (2) that
+    # the concurrent caller already used — simulating the race window
+    # where both callers read the directory before either had written.
+    monkeypatch.setattr(storage_module, "_next_version", lambda category, name: 2)
+
+    with pytest.raises(FileExistsError):
+        save_dataset("collision_ds", make_df(3), category="raw", source="unit_test")
