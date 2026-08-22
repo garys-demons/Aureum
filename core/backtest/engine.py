@@ -68,8 +68,17 @@ class BacktestEngine:
         for event in sorted_events:
             self._update_order_book(event)
             market_data = self._build_market_data(event)
-            signal = self.strategy.decide(market_data)
-            self.signals.append(signal)
+            result = self.strategy.decide(market_data)
+
+            # decide() may return a single Signal or list[Signal] - a
+            # market maker naturally returns two (bid + ask) from one
+            # call (Phase 5, core/strategy/base.py). Normalize to a
+            # flat list so downstream consumers (e.g. Gauri's execution
+            # wiring) always see individual signals, never a nested list.
+            if isinstance(result, list):
+                self.signals.extend(result)
+            else:
+                self.signals.append(result)
         return self.signals
     
     def _update_order_book(self, event: HistoricalEvent) -> None:

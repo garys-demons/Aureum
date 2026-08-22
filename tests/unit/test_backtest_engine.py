@@ -1,5 +1,5 @@
 """
-Tests for the event-driven backtest engine (Phase 4).
+Tests for the event-driven backtest engine (Phase 4/5).
 
 The centerpiece test (test_strategy_cannot_access_future_events) proves
 the engine's no-look-ahead guarantee structurally, not just by
@@ -34,9 +34,6 @@ class CheatingStrategy(StrategyInterface):
     def decide(self, market_data: dict) -> Signal:
         self.seen_timestamps.append(market_data["timestamp"])
 
-        # Attempt to cheat: look for any key that might expose future
-        # data. A correctly-built market_data dict simply won't have
-        # these keys, no matter how hard we look for them.
         forbidden_keys = ["future_events", "next_event", "all_events", "lookahead"]
         for key in forbidden_keys:
             assert key not in market_data, f"Engine leaked future data via key '{key}'"
@@ -60,8 +57,6 @@ def test_strategy_cannot_access_future_events():
     engine = BacktestEngine(strategy=strategy)
     engine.run(trades)
 
-    # The strategy must have seen timestamps in strictly increasing
-    # order - proof it was never handed events out of sequence.
     assert strategy.seen_timestamps == [100, 200, 300]
 
 
@@ -85,7 +80,6 @@ def test_market_data_only_reflects_current_event_fields():
 
     assert seen_market_data[0]["price"] == 111
     assert seen_market_data[1]["price"] == 222
-    # Nothing in the first call's data should mention the second trade's price
     assert 222 not in seen_market_data[0].values()
 
 
@@ -94,6 +88,7 @@ def test_run_returns_signals_in_chronological_order():
 
     from core.strategy.stub_strategy import StubStrategy
     engine = BacktestEngine(strategy=StubStrategy())
+    
     signals = engine.run(trades)
 
     assert len(signals) == 3
@@ -119,15 +114,13 @@ def test_candle_ordered_by_close_time_not_open_time():
     candle = Candle(
         event_type="kline", exchange="binance", symbol="BTCUSDT",
         event_time=1, received_time=1, interval="1m",
-        open_time=100, close_time=160,  # opens at 100, closes at 160
+        open_time=100, close_time=160,
         open=1, high=1, low=1, close=1, volume=1, is_closed=True,
     )
-    trade = make_trade(1, event_time=120)  # happens WHILE the candle is still open
+    trade = make_trade(1, event_time=120)
 
     sorted_events = sort_events_chronologically([candle, trade])
 
-    # The trade (at t=120) must come before the candle (closes at t=160),
-    # even though the candle's open_time (100) is earlier than the trade.
     assert sorted_events[0] is trade
     assert sorted_events[1] is candle
 
@@ -135,7 +128,7 @@ def test_candle_ordered_by_close_time_not_open_time():
 def test_order_book_state_updates_as_events_process():
     """Order book state should build up from snapshot + deltas, and be
     visible in market_data for subsequent events."""
-    from services.market_data.models import OrderBookSnapshot, OrderBookDelta, PriceLevel, SnapshotSource
+    from services.market_data.models import OrderBookSnapshot, PriceLevel, SnapshotSource
 
     snapshot = OrderBookSnapshot(
         event_type="depth_snapshot", exchange="binance", symbol="BTCUSDT",
@@ -156,11 +149,10 @@ def test_order_book_state_updates_as_events_process():
     engine = BacktestEngine(strategy=RecordingStrategy())
     engine.run([snapshot, trade])
 
-    # The trade event (processed second) should see the order book
-    # state established by the snapshot (processed first).
     assert seen_market_data[1]["order_book_best_bid"] == 50000
     assert seen_market_data[1]["order_book_best_ask"] == 50001
-    
+
+
 def test_engine_raises_on_order_book_gap():
     """
     A non-contiguous delta must raise loudly, not silently corrupt book
@@ -180,7 +172,7 @@ def test_engine_raises_on_order_book_gap():
     gapped_delta = OrderBookDelta(
         event_type="depth_update", exchange="binance", symbol="BTCUSDT",
         event_time=200, received_time=200,
-        first_update_id=15, final_update_id=16,  # gap: expected 11, got 15
+        first_update_id=15, final_update_id=16,
         bids=[], asks=[],
     )
 
@@ -219,3 +211,39 @@ def test_engine_applies_contiguous_delta_correctly():
     engine.run([snapshot, contiguous_delta])
 
     assert seen_market_data[-1]["order_book_best_bid"] == 50000
+
+
+def test_engine_flattens_list_of_signals_from_market_maker_style_strategy():
+    """
+    decide() can return list[Signal] (e.g. a market maker's bid+ask).
+    The engine must flatten these into individual signals, not append
+    the list itself as one item (Phase 5 interface update).
+    """
+    class TwoQuoteStrategy(StrategyInterface):
+        def decide(self, market_data: dict):
+            return [
+                Signal(action="buy", symbol=market_data["symbol"], price=99, quantity=1),
+                Signal(action="sell", symbol=market_data["symbol"], price=101, quantity=1),
+            ]
+
+    candles = [make_trade(1, event_time=100)]
+
+    engine = BacktestEngine(strategy=TwoQuoteStrategy())
+    signals = engine.run(candles)
+
+    assert len(signals) == 2
+    assert signals[0].action == "buy"
+    assert signals[1].action == "sell"
+    assert all(isinstance(s, Signal) for s in signals)
+
+
+def test_engine_still_handles_single_signal_strategies():
+    """Backward compatibility: strategies returning a single Signal (e.g. StubStrategy) still work."""
+    from core.strategy.stub_strategy import StubStrategy
+
+    candles = [make_trade(1, event_time=100)]
+    engine = BacktestEngine(strategy=StubStrategy())
+    signals = engine.run(candles)
+
+    assert len(signals) == 1
+    assert signals[0].action == "hold"
