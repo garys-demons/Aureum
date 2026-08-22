@@ -67,8 +67,7 @@ BASELINE_RUN_NAME = "phase5_baseline"
 # "Recent 24h" is the most representative, most-recently-downloaded
 # complete window already saved via Phase 5's parameter-sensitivity
 # work — a deliberate choice, not an arbitrary default.
-BASELINE_DATASET = "adausdt_candles_1m_recent_24h"
-
+BASELINE_DATASET = "adausdt_candles_1m_prior_48h"
 STARTING_CASH = 10_000.0
 
 # Matches paper_exchange.py's MAKER_FEE_RATE — the baseline market
@@ -99,7 +98,7 @@ def run_baseline_evaluation() -> dict[str, int]:
     sorted_candles = sorted(candles, key=lambda c: c.close_time)
     symbol = sorted_candles[0].symbol
 
-    strategy = BaselineMarketMaker(symbol=symbol)
+    strategy = BaselineMarketMaker(symbol=symbol, base_half_spread=0.001)
     portfolio = Portfolio(starting_cash=STARTING_CASH)
 
     last_price = None
@@ -165,7 +164,7 @@ def run_baseline_evaluation() -> dict[str, int]:
         extra_metadata={
             "is_baseline": True,
             "phase": 5,
-            "dataset": BASELINE_DATASET,
+            "dataset": "adausdt_candles_1m_prior_24h",
             "fill_model": "candle_close (no order-book data available for this symbol)",
         },
     )

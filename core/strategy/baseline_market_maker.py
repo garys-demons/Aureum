@@ -85,12 +85,13 @@ def compute_skewed_quotes(
 
 from core.strategy.base import Signal, StrategyInterface
 
-# Starting parameters for ADA (Phase 5 baseline pair). Not yet validated
-# by real backtesting - Hansika's parameter-sensitivity task covers that.
-# Scaled to ADA's price level (~$0.17-0.19 on testnet at time of writing),
-# NOT the BTC-scale numbers used in early hand-verification.
-DEFAULT_BASE_HALF_SPREAD = 0.0005       # ~0.3% of price, a starting guess
-DEFAULT_INVENTORY_SKEW_SENSITIVITY = 0.00002
+# Tuned via evaluation across 3 independent windows (Phase 5, 2026-08-22):
+# 0.0005 (original guess) lost money consistently (4-7% win rate, fee
+# drag + tight spread relative to ADA's intra-candle volatility).
+# 0.001 is profitable across all 3 windows with meaningful trade volume
+# (20-46 fills). 0.002 showed 100% win rate but too few fills (4-10) to
+# be statistically meaningful, and lower total returns than 0.001.
+DEFAULT_BASE_HALF_SPREAD = 0.001DEFAULT_INVENTORY_SKEW_SENSITIVITY = 0.00002
 DEFAULT_ORDER_QUANTITY = 100.0          # units of ADA per quote
 
 
