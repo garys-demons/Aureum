@@ -36,17 +36,51 @@ def run_single_backtest(strategy: StrategyInterface, candles: list[Candle]) -> d
     """
     Run one backtest and return summary statistics for a single
     (parameter combination, window) pair.
+
+    Captures actual quoted prices (not just action counts), since
+    action_counts alone can't distinguish parameter effects for a
+    market maker that always quotes both sides.
+
+    Simulates a fill for every signal via record_fill() after the run,
+    so inventory-dependent parameters (e.g. inventory_skew_sensitivity)
+    have something real to respond to. This is a known simplification
+    ("every quote fills") - real fill simulation is Gauri's paper
+    exchange; this is sufficient for isolating parameter *sensitivity*,
+    not for measuring realistic PnL.
     """
     engine = BacktestEngine(strategy=strategy)
     signals = engine.run(candles)
 
     action_counts: dict[str, int] = {}
+    spreads = []
+    buy_prices = []
+    sell_prices = []
+
     for s in signals:
         action_counts[s.action] = action_counts.get(s.action, 0) + 1
+        if s.action == "buy" and s.price is not None:
+            buy_prices.append(s.price)
+        elif s.action == "sell" and s.price is not None:
+            sell_prices.append(s.price)
+
+        # Simulate the fill so inventory actually moves, giving
+        # skew-dependent parameters something real to respond to.
+        if hasattr(strategy, "record_fill") and s.action in ("buy", "sell") and s.quantity is not None:
+            strategy.record_fill(s.action, s.quantity)
+
+    paired = min(len(buy_prices), len(sell_prices))
+    for i in range(paired):
+        spreads.append(sell_prices[i] - buy_prices[i])
+
+    final_inventory = getattr(strategy, "inventory", None)
 
     return {
         "total_signals": len(signals),
         "action_counts": action_counts,
+        "avg_quoted_spread": sum(spreads) / len(spreads) if spreads else None,
+        "avg_buy_price": sum(buy_prices) / len(buy_prices) if buy_prices else None,
+        "avg_sell_price": sum(sell_prices) / len(sell_prices) if sell_prices else None,
+        "final_inventory": final_inventory,
     }
 
 

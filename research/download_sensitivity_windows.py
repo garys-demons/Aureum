@@ -47,7 +47,7 @@ async def download_window(symbol: str, interval: str, start_time_ms: int, end_ti
 
 
 async def main():
-    symbol = "BTCUSDT"
+    symbol = "ADAUSDT"  # matches BaselineMarketMaker's tuned price scale (Phase 5)
     interval = "1m"
     now_ms = int(time.time() * 1000)
     one_day_ms = 24 * 60 * 60 * 1000
