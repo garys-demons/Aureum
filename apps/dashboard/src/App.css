@@ -117,3 +117,33 @@ code {
   opacity: 0.8;
   margin: 1.5rem 0 0.75rem;
 }
+
+
+/* Restored — dropped from the Phase 3 Datasets.jsx merge (found while
+   adding the Phase 5 Baseline page; Datasets.jsx used these classes
+   but they never landed in this file). */
+.page-subtitle {
+  opacity: 0.7;
+  font-size: 0.9rem;
+  margin: -0.5rem 0 1.25rem;
+}
+.category-badge {
+  display: inline-block;
+  padding: 0.15rem 0.5rem;
+  border-radius: 4px;
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+.category-badge--raw {
+  background: rgba(90, 150, 255, 0.15);
+  color: #7ab0ff;
+}
+.category-badge--processed {
+  background: rgba(120, 220, 150, 0.15);
+  color: #7ee0a0;
+}
+.gap-warning {
+  color: #e0a800;
+  font-size: 0.85em;
+}
