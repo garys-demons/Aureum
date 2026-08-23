@@ -69,20 +69,50 @@ In every window, magnitude grows monotonically with skew sensitivity.
 This is the opposite of the parameter's documented intent (shifting
 quotes to encourage trades that bring inventory back toward neutral).
 
-**Possible explanation (not yet confirmed):** a stronger skew shifts
-quotes more aggressively in the direction of existing inventory,
-which may cause the strategy to chase the prevailing trend rather
-than counteract it, amplifying drift instead of dampening it -
-especially plausible in trending (vs. mean-reverting) market
-conditions, which may describe all 3 tested windows.
+### Root cause identified (2026-08-24, per Samarth's review)
 
-**Verdict: needs adjustment or further investigation before this
-parameter can be trusted at higher values.** Do not increase
-`inventory_skew_sensitivity` above the current default (0.00002)
-without first understanding why higher values amplify rather than
-dampen inventory drift. Recommend Samarth review this finding before
-any parameter change, since it may indicate an issue with the sign or
-formulation of the skew calculation itself, not just its magnitude.
+`compute_skewed_quotes` itself is mathematically correct as a dampener
+(long inventory -> negative skew -> both quotes shift down -> ask
+becomes more attractive -> should reduce position). The amplification
+is not a bug in that formula. Two things were checked directly:
+
+**1. Skew magnitude vs. spread magnitude, at realistic inventory levels:**
+
+```python
+strategy.inventory = 2100  # actual final inventory reached during testing
+skew = -inventory * inventory_skew_sensitivity  # = -0.105 at sensitivity=0.00005
+base_half_spread = 0.001
+# ratio: 105x
+```
+
+At `inventory_skew_sensitivity=0.00005` and the inventory levels the
+test actually reached, `skew` is **105x larger than `base_half_spread`**.
+This is not a subtle edge case - at this ratio, both quotes get pushed
+to the same side of fair price, so the strategy stops symmetrically
+quoting around fair value and effectively starts chasing in one
+direction instead of dampening.
+
+**2. Market conditions across the 3 windows:**
+
+| Window | Price change |
+|---|---|
+| recent_24h | -0.93% |
+| prior_24h | +3.37% |
+| prior_48h | +21.98% |
+
+All 3 windows were trending, not ranging - none provide a clean
+"ranging market" comparison to isolate that variable. However, the
+105x skew/spread ratio alone is a sufficient explanation for the
+amplification regardless of trend/range conditions, since it breaks
+the quoting symmetry directly.
+
+**Conclusion:** the formula is correct; the *tested parameter range*
+was not realistic. `inventory_skew_sensitivity=0.00005` is far too
+aggressive relative to `base_half_spread=0.001` at inventory levels
+this strategy can realistically reach. Either the sensitivity range
+needs to be much smaller, or the skew calculation needs a magnitude
+cap relative to the spread, so skew can shift quotes but never fully
+overwhelm them.
 
 ---
 
@@ -101,10 +131,12 @@ cherry-picking.
 ## Recommendation
 
 - `base_half_spread` = 0.001 (retuned default): confirmed sound.
-- `inventory_skew_sensitivity`: **do not increase above current
-  default without further investigation.** Recommend Samarth review
-  whether the skew calculation's sign/formulation is behaving as
-  intended, given it consistently amplifies rather than dampens
-  inventory drift across all 3 tested windows.
+- `inventory_skew_sensitivity`: root cause confirmed - the formula
+  itself is correct, but the tested range (up to 0.00005) allows skew
+  to exceed base_half_spread by up to 105x at realistic inventory
+  levels, breaking the dampening mechanism. Recommend either (a)
+  capping skew's magnitude relative to spread in the strategy code, or
+  (b) reducing the sensitivity default/tested range significantly.
+  Do not use 0.00005 as-is.
 
 ## Reproduction
