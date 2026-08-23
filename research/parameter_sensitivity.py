@@ -16,6 +16,7 @@ from typing import Any, Callable
 import pandas as pd
 
 from core.backtest.engine import BacktestEngine
+from core.backtest.candle_fill_model import fill_limit_order_candle, Candle as FillCandle
 from core.strategy.base import StrategyInterface
 from research.storage import load_dataset
 from services.market_data.models import Candle
@@ -37,49 +38,58 @@ def run_single_backtest(strategy: StrategyInterface, candles: list[Candle]) -> d
     Run one backtest and return summary statistics for a single
     (parameter combination, window) pair.
 
-    Captures actual quoted prices (not just action counts), since
-    action_counts alone can't distinguish parameter effects for a
-    market maker that always quotes both sides.
-
-    Simulates a fill for every signal via record_fill() after the run,
-    so inventory-dependent parameters (e.g. inventory_skew_sensitivity)
-    have something real to respond to. This is a known simplification
-    ("every quote fills") - real fill simulation is Gauri's paper
-    exchange; this is sufficient for isolating parameter *sensitivity*,
-    not for measuring realistic PnL.
+    Uses core.backtest.candle_fill_model.fill_limit_order_candle() to
+    simulate realistic asymmetric fills - a quote only fills if the
+    candle's actual price range touched it, so only one side (or
+    neither, or both) may fill per candle. This replaces an earlier
+    "every quote fills" simplification, which made inventory always
+    cancel to exactly zero and made inventory_skew_sensitivity
+    untestable in isolation (see phase5_parameter_sensitivity_findings.md).
     """
     engine = BacktestEngine(strategy=strategy)
-    signals = engine.run(candles)
 
     action_counts: dict[str, int] = {}
     spreads = []
-    buy_prices = []
-    sell_prices = []
+    buy_fill_prices = []
+    sell_fill_prices = []
+    fills_count = 0
 
-    for s in signals:
-        action_counts[s.action] = action_counts.get(s.action, 0) + 1
-        if s.action == "buy" and s.price is not None:
-            buy_prices.append(s.price)
-        elif s.action == "sell" and s.price is not None:
-            sell_prices.append(s.price)
+    for original_candle in candles:
+        signals = engine.run([original_candle])
 
-        # Simulate the fill so inventory actually moves, giving
-        # skew-dependent parameters something real to respond to.
-        if hasattr(strategy, "record_fill") and s.action in ("buy", "sell") and s.quantity is not None:
-            strategy.record_fill(s.action, s.quantity)
+        fill_candle = FillCandle(
+            open=original_candle.open, high=original_candle.high,
+            low=original_candle.low, close=original_candle.close,
+        )
 
-    paired = min(len(buy_prices), len(sell_prices))
+        for s in signals:
+            action_counts[s.action] = action_counts.get(s.action, 0) + 1
+
+            if s.action in ("buy", "sell") and s.price is not None and s.quantity is not None:
+                fill = fill_limit_order_candle(fill_candle, s.action, s.quantity, s.price)
+                if fill is not None:
+                    fill_price, fill_qty = fill
+                    fills_count += 1
+                    if hasattr(strategy, "record_fill"):
+                        strategy.record_fill(s.action, fill_qty)
+                    if s.action == "buy":
+                        buy_fill_prices.append(fill_price)
+                    else:
+                        sell_fill_prices.append(fill_price)
+
+    paired = min(len(buy_fill_prices), len(sell_fill_prices))
     for i in range(paired):
-        spreads.append(sell_prices[i] - buy_prices[i])
+        spreads.append(sell_fill_prices[i] - buy_fill_prices[i])
 
     final_inventory = getattr(strategy, "inventory", None)
 
     return {
-        "total_signals": len(signals),
+        "total_signals": sum(action_counts.values()),
         "action_counts": action_counts,
+        "fills_count": fills_count,
         "avg_quoted_spread": sum(spreads) / len(spreads) if spreads else None,
-        "avg_buy_price": sum(buy_prices) / len(buy_prices) if buy_prices else None,
-        "avg_sell_price": sum(sell_prices) / len(sell_prices) if sell_prices else None,
+        "avg_buy_fill_price": sum(buy_fill_prices) / len(buy_fill_prices) if buy_fill_prices else None,
+        "avg_sell_fill_price": sum(sell_fill_prices) / len(sell_fill_prices) if sell_fill_prices else None,
         "final_inventory": final_inventory,
     }
 
@@ -96,9 +106,9 @@ def run_parameter_sweep(
     strategy_factory: a function that takes the swept parameters as
         keyword arguments and returns a fresh StrategyInterface instance
         (e.g. lambda **params: InventoryAwareMarketMaker(**params)).
-    param_grid: e.g. {"spread_width": [0.001, 0.005, 0.01], "skew_factor": [0.1, 0.5]}
+    param_grid: e.g. {"base_half_spread": [0.0005, 0.001], "inventory_skew_sensitivity": [0.00001, 0.00002]}
     window_datasets: names of datasets already saved via research.storage,
-        e.g. ["btcusdt_candles_1m_recent_24h", "btcusdt_candles_1m_prior_24h"]
+        e.g. ["adausdt_candles_1m_recent_24h", "adausdt_candles_1m_prior_24h"]
     """
     param_names = list(param_grid.keys())
     param_combinations = list(itertools.product(*param_grid.values()))
