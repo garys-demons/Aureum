@@ -91,7 +91,8 @@ from core.strategy.base import Signal, StrategyInterface
 # 0.001 is profitable across all 3 windows with meaningful trade volume
 # (20-46 fills). 0.002 showed 100% win rate but too few fills (4-10) to
 # be statistically meaningful, and lower total returns than 0.001.
-DEFAULT_BASE_HALF_SPREAD = 0.001DEFAULT_INVENTORY_SKEW_SENSITIVITY = 0.00002
+DEFAULT_BASE_HALF_SPREAD = 0.001
+DEFAULT_INVENTORY_SKEW_SENSITIVITY = 0.00002
 DEFAULT_ORDER_QUANTITY = 100.0          # units of ADA per quote
 
 
