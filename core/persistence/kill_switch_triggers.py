@@ -8,19 +8,13 @@ from the detectors themselves (anomaly.py, volatility_anomaly.py) so
 those stay simple and don't need to know about the kill switch to be
 unit-tested in isolation.
 
-NOTE: imports core.risk.kill_switch (or wherever Samarth's module ends
-up) - update the import path once his module is pushed and confirmed.
+Imports core.risk.kill_switch.KillSwitch / TriggerCategory directly -
+confirmed real interface (Phase 6, feature/risk-engine).
 """
 from core.persistence.anomaly import ReconnectFrequencyMonitor
 from core.persistence.volatility_anomaly import ExtremeVolatilityMonitor
 
-# TODO: confirm real import path once Samarth pushes and swap this
-# placeholder for the real import: from core.risk.kill_switch import KillSwitch, TriggerCategory
-class TriggerCategory:
-    """Placeholder until Samarth's real TriggerCategory is available."""
-    ORDER_BOOK_GAP = "ORDER_BOOK_GAP"
-    RECONNECT_STORM = "RECONNECT_STORM"
-    EXTREME_VOLATILITY = "EXTREME_VOLATILITY"
+from core.risk.kill_switch import KillSwitch, TriggerCategory
 
 
 def check_order_book_gap(kill_switch, gap_detected: bool, stream_key: str) -> None:
