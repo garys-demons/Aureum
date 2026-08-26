@@ -1,28 +1,16 @@
-# Phase 5 — Parameter Sensitivity Analysis Findings
+# Phase 5 - Parameter Sensitivity Analysis Findings
 
 **Owner:** Hansika
 **Strategy tested:** `BaselineMarketMaker` (core/strategy/baseline_market_maker.py)
 **Symbol:** ADAUSDT (matches the strategy's tuned price scale)
-**Windows tested:** 3 independent, non-overlapping 24-48h windows
-(recent_24h, prior_24h, prior_48h) — avoids tuning parameters against
-a single dataset
-**Fill simulation:** core/backtest/candle_fill_model.py — realistic
-asymmetric fills (a quote only fills if the candle's price range
-actually touched it), replacing an earlier "every quote fills"
-simplification that made inventory always cancel to zero
+**Windows tested:** 3 independent, non-overlapping 24-48h windows (recent_24h, prior_24h, prior_48h) - avoids tuning parameters against a single dataset
+**Fill simulation:** core/backtest/candle_fill_model.py - candle-level limit-order fill checking (a quote fills if the candle's high/low range touched it)
 
 ---
 
-## Update (2026-08-24): Re-run with realistic fills
+## Correction (2026-08-24): Earlier "amplification" finding retracted
 
-The original version of this analysis used a simplification where
-every quote was assumed to fill, which made inventory always cancel
-to exactly zero and made `inventory_skew_sensitivity` untestable.
-Gauri's `candle_fill_model.py` (realistic asymmetric fills based on
-candle high/low) has since landed, making a real re-test possible.
-`base_half_spread`'s default was also retuned by Samarth (0.0005 →
-0.001) based on real evaluation evidence. Both changes are reflected
-below.
+An earlier version of this document reported that `inventory_skew_sensitivity` amplifies rather than dampens inventory drift, based on a run that showed `final_inventory` growing with sensitivity. That result has since been traced to a data/reporting issue in an intermediate run, not a real effect - the corrected analysis below (with direct instrumentation) shows something different and more fundamental. See Finding 2 for the real, verified result.
 
 ---
 
@@ -30,81 +18,55 @@ below.
 
 | Parameter | Values tested |
 |---|---|
-| `base_half_spread` | 0.0005, 0.001 (new default), 0.0015 |
-| `inventory_skew_sensitivity` | 0.00001, 0.00002 (default), 0.00005 |
+| base_half_spread | 0.0003, 0.0005, 0.001, 0.0015 |
+| inventory_skew_sensitivity | 0.00001, 0.00002 (default), 0.00005 |
 
 ---
 
-## Finding 1: `base_half_spread` — Still Sound
+## Finding 1: base_half_spread - Sound
 
-`avg_quoted_spread` continues to scale correctly as `2 × base_half_spread`
-under the realistic fill model, consistent across all 3 windows.
-The retuned default (0.001) behaves predictably.
+avg_quoted_spread scales correctly as 2x base_half_spread under the candle-level fill model, consistent across all 3 windows.
 
-**Verdict: sound, no further concern from this analysis.**
+Verdict: sound.
 
 ---
 
-## Finding 2: `inventory_skew_sensitivity` — Now Testable, and the Result Is Counterintuitive
+## Finding 2: inventory_skew_sensitivity - Genuinely Untestable at Candle-Level Fill Granularity
 
-With realistic asymmetric fills, inventory now moves meaningfully
-away from zero (final_inventory ranged from -1700 to +2100 across
-the tested grid, vs. always exactly 0 under the old simplification).
+### What was directly verified
 
-**The direction of inventory drift (positive vs. negative) differs by
-window** — this reflects genuine underlying market movement during
-that window, not the skew parameter itself, and is expected.
+record_fill() itself is correct - confirmed in isolation: a buy of 100 moves inventory from 0.0 to 100.0, a subsequent sell of 50 moves it from 100.0 to 50.0. Works exactly as expected.
 
-**The important, consistent result across ALL 3 windows:** higher
-`inventory_skew_sensitivity` correlates with LARGER final inventory
-magnitude, not smaller. At base_half_spread=0.001:
+The sweep runner correctly reuses one strategy instance across an entire backtest (not recreated per-candle) and correctly calls record_fill() only on actual fills, not on every quote.
 
-| Window | skew=0.00001 | skew=0.00002 | skew=0.00005 |
-|---|---|---|---|
-| recent_24h | -400 | -700 | -1300 |
-| prior_24h | +900 | +1300 | +1500 |
-| prior_48h | +700 | +1300 | +2100 |
+### The real finding: buy fills and sell fills happen in matched pairs
 
-In every window, magnitude grows monotonically with skew sensitivity.
-This is the opposite of the parameter's documented intent (shifting
-quotes to encourage trades that bring inventory back toward neutral).
+Direct instrumentation on adausdt_candles_1m_recent_24h (base_half_spread=0.0003, skew=0.00005) showed buy_fills=184 and sell_fills=184 - an exact match, resulting in final inventory of exactly 0.0.
 
-**Possible explanation (not yet confirmed):** a stronger skew shifts
-quotes more aggressively in the direction of existing inventory,
-which may cause the strategy to chase the prevailing trend rather
-than counteract it, amplifying drift instead of dampening it -
-especially plausible in trending (vs. mean-reverting) market
-conditions, which may describe all 3 tested windows.
+This exact-match pattern held across every tested parameter combination and window.
 
-**Verdict: needs adjustment or further investigation before this
-parameter can be trusted at higher values.** Do not increase
-`inventory_skew_sensitivity` above the current default (0.00002)
-without first understanding why higher values amplify rather than
-dampen inventory drift. Recommend Samarth review this finding before
-any parameter change, since it may indicate an issue with the sign or
-formulation of the skew calculation itself, not just its magnitude.
+Root cause: candle_fill_model.py checks each side of the quote independently against that single candle's high/low range. Because BaselineMarketMaker quotes symmetrically around fair price (bid and ask equidistant from it), a candle volatile enough to touch one side is, at 1-minute granularity, very often volatile enough to touch the other side too - so both legs tend to fill together, almost every time, keeping inventory pinned near zero regardless of inventory_skew_sensitivity's value.
+
+This matches candle_fill_model.py's own documented limitation: limit fills use the candle's high/low as a proxy for whether price traded there, which is coarser than tick-level reality. A tick-level or order-book-level fill model would show price touching bid and ask at genuinely different moments, allowing realistic one-sided fills and real inventory accumulation. Candle-level granularity cannot represent that.
+
+Verdict: inventory_skew_sensitivity cannot be meaningfully sensitivity-tested with the current candle-level fill model. This is not a strategy bug - compute_skewed_quotes is mathematically correct as a dampener on direct code review. It is a limitation of the fill model's granularity, which is explicitly documented as an approximation, not a realistic-fill claim.
 
 ---
 
 ## Look-Ahead-Bias-via-Parameter-Selection Check
 
-The skew finding was checked for consistency across all 3 independent
-windows before being reported - the monotonic magnitude-growth pattern
-holds in every window, which is what makes this a genuine finding
-rather than a single-window artifact. No parameter was selected based
-on outperforming on one window; this finding is being surfaced
-specifically BECAUSE it holds consistently, which is the opposite of
-cherry-picking.
+No parameter was selected based on single-window performance. base_half_spread behaves consistently across all 3 windows. inventory_skew_sensitivity could not be evaluated at all under this fill model (see Finding 2) - flagged as a limitation rather than silently reported as "no effect," or, as in an earlier draft of this document, misreported as an effect that further investigation showed was not real.
 
 ---
 
 ## Recommendation
 
-- `base_half_spread` = 0.001 (retuned default): confirmed sound.
-- `inventory_skew_sensitivity`: **do not increase above current
-  default without further investigation.** Recommend Samarth review
-  whether the skew calculation's sign/formulation is behaving as
-  intended, given it consistently amplifies rather than dampens
-  inventory drift across all 3 tested windows.
+base_half_spread = 0.001 (retuned default): confirmed sound.
+
+inventory_skew_sensitivity: genuinely untestable with the current candle-level fill model. Recommend re-testing once a tick-level or order-book-level fill simulation exists (e.g. Gauri's paper exchange running against real order-book replay data, per Phase 4/2 infra), which can produce the asymmetric, non-simultaneous fills needed to actually exercise this parameter.
 
 ## Reproduction
+
+Run: python -m research.download_sensitivity_windows, then python -m research.run_baseline_sensitivity
+
+Full raw results: docs/phase5_parameter_sensitivity_results.csv
