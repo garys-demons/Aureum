@@ -1,3 +1,4 @@
+from cmath import log
 from unittest.mock import MagicMock
 from core.risk.risk_engine import RiskEngine
 from core.risk.kill_switch import KillSwitch, TriggerCategory
@@ -47,3 +48,20 @@ def test_unexpected_exception_blocks_not_allows():
 
     result = engine.check("buy", quantity=100, current_inventory=0)
     assert result is False  # not True, and no exception propagated
+
+def test_logging_failure_inside_except_does_not_crash_check():
+    """
+    If the logging call itself fails while handling an unexpected
+    exception, check() must still return False, not raise - the
+    fail-safe guarantee can't depend on logging always succeeding.
+    """
+    from unittest.mock import patch
+    from core.risk.kill_switch import KillSwitch
+    from core.risk.risk_engine import RiskEngine
+
+    engine = RiskEngine(kill_switch=KillSwitch(), max_order_size=100, max_position=1000)
+
+    with patch("core.risk.risk_engine.exceeds_max_order_size", side_effect=RuntimeError("boom")):
+        with patch("core.risk.risk_engine.log.error", side_effect=Exception("logging broke")):
+            result = engine.check(action="buy", quantity=10, current_inventory=0)
+            assert result is False

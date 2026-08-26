@@ -55,5 +55,10 @@ class RiskEngine:
 
         except Exception as e:
             # Fail-safe: cannot determine safety -> reject, do not allow.
-            log.error("risk_check_error_defaulting_to_reject", error=str(e), exc_info=True)
+            # Logging itself is wrapped separately - a logging failure must
+            # never prevent this fail-safe return from happening.
+            try:
+                log.error("risk_check_error_defaulting_to_reject", error=str(e), exc_info=True)
+            except Exception:
+                pass
             return False
