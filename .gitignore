@@ -32,3 +32,5 @@ find_all_occurrences.py
 fix_duplication.py 
 view_context.py 
 view_full_function.py 
+check_regime_on_real_data.py 
+measure_volatility_distribution.py 
