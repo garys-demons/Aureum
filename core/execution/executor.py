@@ -6,6 +6,7 @@ from binance.client import Client
 from core.strategy.base import Signal
 from core.risk.risk_engine import RiskEngine
 from core.risk.kill_switch import KillSwitch
+from core.persistence.risk_audit import record_risk_decision
 
 load_dotenv()
 log = structlog.get_logger()
@@ -42,6 +43,14 @@ def risk_check(signal: Signal, quantity: float, current_inventory: float) -> boo
         "risk_check_result",
         action=signal.action, symbol=signal.symbol, quantity=quantity,
         current_inventory=current_inventory, allowed=allowed,
+    )
+    record_risk_decision(
+        action=signal.action,
+        symbol=signal.symbol,
+        quantity=quantity,
+        current_inventory=current_inventory,
+        allowed=allowed,
+        kill_switch_status=_risk_engine.kill_switch.status(),
     )
     return allowed
 
