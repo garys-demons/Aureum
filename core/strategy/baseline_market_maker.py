@@ -24,7 +24,7 @@ def compute_fair_price(market_data: dict) -> float | None:
     1. Real order book midpoint (order_book_best_bid/ask) - most accurate,
        but only present if this backtest run includes order-book events.
     2. Candle close - the settled price of the most recent completed bar.
-       The current baseline dataset (btcusdt_candles_1m) has NO
+       The current baseline dataset (adausdt_candles_1m) has NO
        order-book events at all, so this is the path actually exercised
        right now, not a fallback edge case.
     3. Trade price - if all we have is a single trade event.
@@ -122,6 +122,10 @@ class BaselineMarketMaker(StrategyInterface):
         self.inventory_skew_sensitivity = inventory_skew_sensitivity
         self.order_quantity = order_quantity
         self.inventory: float = 0.0
+        self.max_abs_inventory: float = 0.0  # peak |inventory| reached, for sensitivity analysis -
+                                             # final_inventory alone can't distinguish dampening
+                                             # from amplification, since it's a snapshot that can
+                                             # land anywhere depending on fill parity at session end
 
     def record_fill(self, action: str, quantity: float) -> None:
         """
@@ -130,9 +134,11 @@ class BaselineMarketMaker(StrategyInterface):
         matches reality rather than assuming every quote fills.
         """
         if action == "buy":
-            self.inventory += quantity
+          self.inventory += quantity
         elif action == "sell":
-            self.inventory -= quantity
+          self.inventory -= quantity
+
+        self.max_abs_inventory = max(self.max_abs_inventory, abs(self.inventory))
 
     def decide(self, market_data: dict) -> list[Signal] | Signal:
         """

@@ -7,6 +7,7 @@ const links = [
   { to: '/order-book', label: 'Order Book' },
   { to: '/datasets', label: 'Datasets' },
   { to: '/baseline', label: 'Baseline' },
+  { to: '/risk', label: 'Risk' },
 ]
 
 function NavBar() {

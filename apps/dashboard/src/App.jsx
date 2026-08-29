@@ -6,6 +6,7 @@ import Anomalies from './pages/Anomalies.jsx'
 import OrderBook from './pages/OrderBook.jsx'
 import Datasets from './pages/Datasets.jsx'
 import Baseline from './pages/Baseline.jsx'
+import Risk from './pages/Risk.jsx'
 import './App.css'
 
 function App() {
@@ -21,6 +22,7 @@ function App() {
             <Route path="/order-book" element={<OrderBook />} />
             <Route path="/datasets" element={<Datasets />} />
             <Route path="/baseline" element={<Baseline />} />
+            <Route path="/risk" element={<Risk />} />
           </Routes>
         </main>
       </div>

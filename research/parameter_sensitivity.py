@@ -82,6 +82,7 @@ def run_single_backtest(strategy: StrategyInterface, candles: list[Candle]) -> d
         spreads.append(sell_fill_prices[i] - buy_fill_prices[i])
 
     final_inventory = getattr(strategy, "inventory", None)
+    max_abs_inventory = getattr(strategy, "max_abs_inventory", None)
 
     return {
         "total_signals": sum(action_counts.values()),
@@ -91,6 +92,7 @@ def run_single_backtest(strategy: StrategyInterface, candles: list[Candle]) -> d
         "avg_buy_fill_price": sum(buy_fill_prices) / len(buy_fill_prices) if buy_fill_prices else None,
         "avg_sell_fill_price": sum(sell_fill_prices) / len(sell_fill_prices) if sell_fill_prices else None,
         "final_inventory": final_inventory,
+        "max_abs_inventory": max_abs_inventory,
     }
 
 
