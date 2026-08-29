@@ -23,12 +23,5 @@ check_depth_detail.py
 check_ada_quotes.py
 check_dupes.py
 check_fee_drag.py
-debug_inventory_trace.py 
-debug_risk_rejections.py 
-count_rejections.py 
-debug_quote_prices.py 
-fix_risk_constants.py 
-find_all_occurrences.py 
-fix_duplication.py 
-view_context.py 
-view_full_function.py 
+
+core/risk/kill_switch.py
