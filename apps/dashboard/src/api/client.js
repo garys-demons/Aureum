@@ -31,8 +31,12 @@ export const api = {
   // Restoring it (Phase 5 fix, found while adding getBaselineRun).
   getDatasets: () => request('/datasets'),
   getBaselineRun: () => request('/baseline-run'),
-    getRiskDecisions: (params = {}) => {
+  getRiskDecisions: (params = {}) => {
     const qs = new URLSearchParams(params).toString()
     return request(`/risk/decisions${qs ? `?${qs}` : ''}`)
+  },
+  getAiActivity: (params = {}) => {
+    const qs = new URLSearchParams(params).toString()
+    return request(`/ai-reasoning/activity${qs ? `?${qs}` : ''}`)
   },
 }
