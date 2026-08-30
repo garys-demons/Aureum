@@ -60,6 +60,8 @@ from core.strategy.baseline_market_maker import BaselineMarketMaker
 from research.backtest.results import save_backtest_run
 from research.storage import load_dataset
 from services.market_data.models import Candle
+from core.risk.risk_engine import RiskEngine
+from core.risk.kill_switch import KillSwitch
 
 BASELINE_RUN_NAME = "phase5_baseline"
 
@@ -67,7 +69,7 @@ BASELINE_RUN_NAME = "phase5_baseline"
 # "Recent 24h" is the most representative, most-recently-downloaded
 # complete window already saved via Phase 5's parameter-sensitivity
 # work — a deliberate choice, not an arbitrary default.
-BASELINE_DATASET = "adausdt_candles_1m_prior_48h"
+BASELINE_DATASET = "adausdt_candles_1m_recent_24h"
 STARTING_CASH = 10_000.0
 
 # Matches paper_exchange.py's MAKER_FEE_RATE — the baseline market
@@ -75,6 +77,8 @@ STARTING_CASH = 10_000.0
 # correct rate even though candle_fill_model itself doesn't compute
 # fees (it only determines whether/where a fill happened).
 MAKER_FEE_RATE = 0.0005
+BACKTEST_MAX_ORDER_SIZE = 100.0
+BACKTEST_MAX_POSITION = 500.0
 
 
 def dataframe_to_candles(df: pd.DataFrame) -> list[Candle]:
@@ -100,6 +104,11 @@ def run_baseline_evaluation() -> dict[str, int]:
 
     strategy = BaselineMarketMaker(symbol=symbol, base_half_spread=0.001)
     portfolio = Portfolio(starting_cash=STARTING_CASH)
+    risk_engine = RiskEngine(
+        kill_switch=KillSwitch(),
+        max_order_size=BACKTEST_MAX_ORDER_SIZE,
+        max_position=BACKTEST_MAX_POSITION,
+    )
 
     last_price = None
     for candle in sorted_candles:
@@ -129,6 +138,20 @@ def run_baseline_evaluation() -> dict[str, int]:
             if signal.action == "hold" or signal.price is None or signal.quantity is None:
                 continue
 
+            # Phase 6: same Strategy -> Risk -> Execution gate the live
+            # path uses. Deliberately NOT persisted to the audit trail
+            # here (that's a live-trading concern) - a backtest run can
+            # produce thousands of checks per run; persisting all of
+            # them would pollute audit_log, which is meant to record
+            # real trading activity, not backtest iterations.
+            allowed = risk_engine.check(
+                action=signal.action,
+                quantity=signal.quantity,
+                current_inventory=strategy.inventory,
+            )
+            if not allowed:
+                continue  # risk-rejected, never reaches the fill model
+
             fill_result = fill_limit_order_candle(
                 fill_candle, side=signal.action,
                 quantity=signal.quantity, limit_price=signal.price,
@@ -138,7 +161,6 @@ def run_baseline_evaluation() -> dict[str, int]:
 
             fill_price, fill_quantity = fill_result
             fee = fill_price * fill_quantity * MAKER_FEE_RATE
-
             portfolio.process_fill(PortfolioFill(
                 symbol=signal.symbol, side=signal.action, quantity=fill_quantity,
                 price=fill_price, fee=fee, timestamp=occurred_at,
@@ -164,7 +186,7 @@ def run_baseline_evaluation() -> dict[str, int]:
         extra_metadata={
             "is_baseline": True,
             "phase": 5,
-            "dataset": "adausdt_candles_1m_prior_24h",
+            "dataset": "adausdt_candles_1m_recent_24h",
             "fill_model": "candle_close (no order-book data available for this symbol)",
         },
     )
