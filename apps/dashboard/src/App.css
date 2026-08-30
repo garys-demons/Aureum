@@ -147,3 +147,21 @@ code {
   color: #e0a800;
   font-size: 0.85em;
 }
+
+/* Phase 7 — AI Activity regime badges */
+.category-badge--regime-ranging {
+  background: rgba(120, 220, 150, 0.15);
+  color: #7ee0a0;
+}
+.category-badge--regime-trending {
+  background: rgba(90, 150, 255, 0.15);
+  color: #7ab0ff;
+}
+.category-badge--regime-high_volatility {
+  background: rgba(217, 83, 79, 0.15);
+  color: #e08a87;
+}
+.category-badge--regime-unknown {
+  background: rgba(150, 150, 150, 0.15);
+  color: #999;
+}
