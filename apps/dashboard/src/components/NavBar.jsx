@@ -5,6 +5,10 @@ const links = [
   { to: '/audit-log', label: 'Audit Log' },
   { to: '/anomalies', label: 'Anomalies' },
   { to: '/order-book', label: 'Order Book' },
+  { to: '/datasets', label: 'Datasets' },
+  { to: '/baseline', label: 'Baseline' },
+  { to: '/risk', label: 'Risk' },
+  { to: '/ai-activity', label: 'AI Activity' },
 ]
 
 function NavBar() {

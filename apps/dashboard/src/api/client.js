@@ -25,4 +25,18 @@ export const api = {
   },
   getOverviewStats: () => request('/overview'),
   getOrderBook: (symbol) => request(`/order-book/${symbol}`),
+  // getDatasets was missing here despite Datasets.jsx calling it —
+  // the page currently throws "api.getDatasets is not a function" at
+  // runtime instead of showing the normal "Failed to load" state.
+  // Restoring it (Phase 5 fix, found while adding getBaselineRun).
+  getDatasets: () => request('/datasets'),
+  getBaselineRun: () => request('/baseline-run'),
+  getRiskDecisions: (params = {}) => {
+    const qs = new URLSearchParams(params).toString()
+    return request(`/risk/decisions${qs ? `?${qs}` : ''}`)
+  },
+  getAiActivity: (params = {}) => {
+    const qs = new URLSearchParams(params).toString()
+    return request(`/ai-reasoning/activity${qs ? `?${qs}` : ''}`)
+  },
 }

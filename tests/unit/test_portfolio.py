@@ -95,11 +95,113 @@ def test_insufficient_cash_is_rejected():
         p.process_fill(Fill("BTCUSDT", "buy", 1.0, 200.0, 1.0, datetime(2024, 1, 1)))
 
 
-def test_selling_more_than_held_is_rejected():
+def test_selling_more_than_held_opens_a_short_position():
+    """
+    Regression test for Phase 5: the original long-only restriction was
+    removed because BaselineMarketMaker legitimately needs to sell
+    before holding any inventory (two-sided quoting). Selling more than
+    currently held should now correctly open a short position, not raise.
+    """
     p = Portfolio(starting_cash=10_000.0)
     p.process_fill(Fill("BTCUSDT", "buy", 1.0, 100.0, 0.0, datetime(2024, 1, 1)))
-    with pytest.raises(ValueError, match="short-selling is out of scope"):
-        p.process_fill(Fill("BTCUSDT", "sell", 2.0, 100.0, 0.0, datetime(2024, 1, 2)))
+    p.process_fill(Fill("BTCUSDT", "sell", 3.0, 100.0, 0.0, datetime(2024, 1, 2)))
+    # 1 long unit closes, 2 remaining units open a new short
+    assert p.position("BTCUSDT") == -2.0
+
+
+def test_opening_a_short_from_flat():
+    p = Portfolio(starting_cash=10_000.0)
+    p.process_fill(Fill("BTCUSDT", "sell", 10.0, 100.0, 0.0, datetime(2024, 1, 1)))
+
+    assert p.position("BTCUSDT") == -10.0
+    # Selling receives cash, regardless of long/short
+    assert p.cash == 10_000.0 + 1_000.0
+
+
+def test_covering_a_profitable_short():
+    """Short 10 @ $100, cover (buy back) at $90 — price fell, short profits.
+    realized = (entry - exit) * qty = (100 - 90) * 10 = 100."""
+    p = Portfolio(starting_cash=10_000.0)
+    p.process_fill(Fill("BTCUSDT", "sell", 10.0, 100.0, 0.0, datetime(2024, 1, 1)))
+    p.process_fill(Fill("BTCUSDT", "buy", 10.0, 90.0, 0.0, datetime(2024, 1, 2)))
+
+    assert p.position("BTCUSDT") == 0.0
+    assert p.realized_pnl == 100.0
+    assert p.cash == 10_000.0 + 1_000.0 - 900.0  # = 10100.0
+
+
+def test_covering_a_losing_short():
+    """Short 10 @ $100, cover at $110 — price rose against the short.
+    realized = (100 - 110) * 10 = -100 (a loss)."""
+    p = Portfolio(starting_cash=10_000.0)
+    p.process_fill(Fill("BTCUSDT", "sell", 10.0, 100.0, 0.0, datetime(2024, 1, 1)))
+    p.process_fill(Fill("BTCUSDT", "buy", 10.0, 110.0, 0.0, datetime(2024, 1, 2)))
+
+    assert p.realized_pnl == -100.0
+
+
+def test_position_flip_from_short_to_long():
+    """Short 15 @ $50, then buy 20 @ $45: 15 closes the short (realizing
+    PnL), remaining 5 opens a new LONG position at the fill price."""
+    p = Portfolio(starting_cash=10_000.0)
+    p.process_fill(Fill("BTCUSDT", "sell", 15.0, 50.0, 0.0, datetime(2024, 1, 1)))
+    p.process_fill(Fill("BTCUSDT", "buy", 20.0, 45.0, 0.0, datetime(2024, 1, 2)))
+
+    assert p.position("BTCUSDT") == 5.0  # flipped from -15 to +5
+    assert p.realized_pnl == 75.0  # (50-45)*15 closing the short
+
+
+def test_position_flip_from_long_to_short():
+    """Buy 10 @ $100, then sell 15 @ $105: 10 closes the long (realizing
+    PnL), remaining 5 opens a new SHORT position at the fill price."""
+    p = Portfolio(starting_cash=10_000.0)
+    p.process_fill(Fill("BTCUSDT", "buy", 10.0, 100.0, 0.0, datetime(2024, 1, 1)))
+    p.process_fill(Fill("BTCUSDT", "sell", 15.0, 105.0, 0.0, datetime(2024, 1, 2)))
+
+    assert p.position("BTCUSDT") == -5.0  # flipped from +10 to -5
+    assert p.realized_pnl == 50.0  # (105-100)*10 closing the long
+
+
+def test_unrealized_pnl_correct_for_short_position():
+    """Short 10 @ $100. Price drops to $90 -> short is profitable.
+    unrealized = (current - entry) * quantity = (90 - 100) * -10 = 100."""
+    p = Portfolio(starting_cash=10_000.0)
+    p.process_fill(Fill("BTCUSDT", "sell", 10.0, 100.0, 0.0, datetime(2024, 1, 1)))
+
+    assert p.unrealized_pnl({"BTCUSDT": 90.0}) == 100.0
+    # Price rising against the short should show a loss
+    assert p.unrealized_pnl({"BTCUSDT": 110.0}) == -100.0
+
+
+def test_total_equity_includes_short_position_value():
+    """A short position should REDUCE total equity by its market value
+    (you owe those units back), not be excluded from the calculation."""
+    p = Portfolio(starting_cash=10_000.0)
+    p.process_fill(Fill("BTCUSDT", "sell", 10.0, 100.0, 0.0, datetime(2024, 1, 1)))
+    # cash = 10000 + 1000 = 11000; position value = -10 * 100 = -1000
+    assert p.total_equity({"BTCUSDT": 100.0}) == 11_000.0 - 1_000.0
+
+
+def test_win_rate_counts_profitable_short_covers_as_wins():
+    """A profitable BUY that covers a short must count toward win rate,
+    not just profitable sells — this only matters once shorting exists."""
+    p = Portfolio(starting_cash=10_000.0)
+    p.process_fill(Fill("BTCUSDT", "sell", 10.0, 100.0, 0.0, datetime(2024, 1, 1)))
+    p.process_fill(Fill("BTCUSDT", "buy", 10.0, 90.0, 0.0, datetime(2024, 1, 2)))  # winning cover
+
+    summary = p.summary()
+    assert summary["num_closing_trades"] == 1
+    assert summary["win_rate_pct"] == 100.0
+
+
+def test_no_cash_check_for_opening_a_short():
+    """Opening a short receives cash immediately — it should never be
+    blocked by an affordability check the way a buy is."""
+    p = Portfolio(starting_cash=10.0)  # very little cash
+    # Should not raise, even though this "trade" is much bigger than
+    # available cash — selling brings cash IN, doesn't require it upfront.
+    p.process_fill(Fill("BTCUSDT", "sell", 100.0, 100.0, 0.0, datetime(2024, 1, 1)))
+    assert p.position("BTCUSDT") == -100.0
 
 
 def test_max_drawdown_hand_calculated():

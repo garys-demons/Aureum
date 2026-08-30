@@ -21,13 +21,29 @@ backtest run's results (calling research.storage.save_dataset()) is a
 separate concern, handled in research/backtest/results.py instead —
 that's where the boundary-crossing call belongs, not here.
 
-SCOPE: long-only, no short-selling
---------------------------------------
-Selling more than you currently hold raises a clear error rather than
-silently producing a negative position and questionable PnL numbers.
-Short-selling isn't part of this phase's scope — if it's needed later,
-it should be added deliberately, with its own tested math, not fall
-out accidentally from unclamped arithmetic here.
+SHORT-SELLING SUPPORT (added Phase 5)
+------------------------------------------
+Originally long-only, with short-selling explicitly documented as
+"out of scope — add deliberately if needed later." That moment arrived
+building the Phase 5 baseline evaluation: BaselineMarketMaker quotes
+both a bid and an ask before holding any inventory — a real two-sided
+market maker routinely goes net short, that's not an edge case, it's
+the normal behavior being tested. So this now supports both directions:
+
+- A position's `quantity` can be positive (long) or negative (short).
+- A fill in the OPPOSITE direction of the current position first
+  CLOSES existing exposure (realizing PnL on that portion), and any
+  remainder beyond that OPENS a new position in the new direction
+  (e.g. selling 150 while long 100 realizes PnL on 100, then opens a
+  new 50-unit short at the fill price).
+- Cash impact is unaffected by long/short/opening/closing — buying
+  always costs cash, selling always receives cash, regardless of
+  what it does to the position. Only realized PnL and the position's
+  average entry price need the open/close/flip logic above.
+- No margin requirement is enforced for opening a short (a real
+  broker would require margin; this is a documented simplification —
+  the goal here is a correct PnL/win-rate/drawdown reference number
+  for the baseline, not a margin-risk-managed simulation).
 """
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -57,13 +73,13 @@ class Fill:
 
 @dataclass
 class _PositionState:
-    quantity: float = 0.0
+    quantity: float = 0.0  # positive = long, negative = short, 0 = flat
     avg_entry_price: float = 0.0
 
 
 class Portfolio:
     """
-    Tracks cash, positions, and PnL through a backtest run.
+    Tracks cash, positions (long or short), and PnL through a backtest run.
 
     Usage:
         portfolio = Portfolio(starting_cash=10_000.0)
@@ -85,48 +101,75 @@ class Portfolio:
         self.equity_curve: list[dict] = []  # [{"timestamp": ..., "equity": ...}, ...]
 
     def position(self, symbol: str) -> float:
-        """Current held quantity for a symbol (0.0 if none)."""
+        """Current position for a symbol — positive if long, negative
+        if short, 0.0 if flat/never traded."""
         state = self._positions.get(symbol)
         return state.quantity if state else 0.0
 
     def process_fill(self, fill: Fill) -> None:
         """
-        Applies one fill to portfolio state — updates cash, position,
-        average entry price, and (on a sell) realized PnL.
+        Applies one fill to portfolio state. A fill in the opposite
+        direction of the current position closes existing exposure
+        first (realizing PnL on that portion), then opens a new
+        position in the new direction with any remaining quantity —
+        see module docstring for the full explanation.
         """
         state = self._positions.setdefault(fill.symbol, _PositionState())
-        realized_this_trade = 0.0
+        signed_qty = fill.quantity if fill.side == "buy" else -fill.quantity
 
+        # Cash impact doesn't care about long/short/open/close — buying
+        # costs cash, selling receives cash, always.
         if fill.side == "buy":
-            total_cost = fill.quantity * fill.price + fill.fee
-            if total_cost > self.cash:
+            cash_impact = -(fill.quantity * fill.price + fill.fee)
+            if -cash_impact > self.cash:
                 raise ValueError(
-                    f"Insufficient cash: fill for {fill.symbol} costs {total_cost:.2f}, "
+                    f"Insufficient cash: fill for {fill.symbol} costs {-cash_impact:.2f}, "
                     f"only {self.cash:.2f} available"
                 )
+        else:
+            cash_impact = fill.quantity * fill.price - fill.fee
+            # No margin check for opening/extending a short — documented
+            # simplification, see module docstring.
 
-            # Weighted-average cost basis across the old and new quantity.
-            new_quantity = state.quantity + fill.quantity
-            state.avg_entry_price = (
-                (state.avg_entry_price * state.quantity + fill.price * fill.quantity)
-                / new_quantity
-            )
-            state.quantity = new_quantity
-            self.cash -= total_cost
+        old_qty = state.quantity
+        new_qty = old_qty + signed_qty
+        realized_this_trade = 0.0
 
-        else:  # sell
-            if fill.quantity > state.quantity:
-                raise ValueError(
-                    f"Cannot sell {fill.quantity} of {fill.symbol}, only "
-                    f"{state.quantity} held (short-selling is out of scope — see module docstring)"
+        same_direction_or_flat = old_qty == 0 or (old_qty > 0) == (signed_qty > 0)
+        if same_direction_or_flat:
+            closing_qty = 0.0
+            opening_qty = abs(signed_qty)
+        else:
+            closing_qty = min(abs(signed_qty), abs(old_qty))
+            opening_qty = abs(signed_qty) - closing_qty
+
+        if closing_qty > 0:
+            if old_qty > 0:  # was long, this fill sells — profit if price rose
+                realized_this_trade = (fill.price - state.avg_entry_price) * closing_qty
+            else:  # was short, this fill buys — profit if price fell
+                realized_this_trade = (state.avg_entry_price - fill.price) * closing_qty
+            # Fee allocated proportionally to the closing portion.
+            realized_this_trade -= fill.fee * (closing_qty / abs(signed_qty))
+            self.realized_pnl += realized_this_trade
+
+        if opening_qty > 0:
+            if closing_qty > 0:
+                # Position fully closed and flipped direction — the old
+                # position is gone, this is a fresh cost basis.
+                state.avg_entry_price = fill.price
+            else:
+                # Extending an existing same-direction position —
+                # weighted average across old and new quantity.
+                total_existing = abs(old_qty)
+                state.avg_entry_price = (
+                    (state.avg_entry_price * total_existing + fill.price * opening_qty)
+                    / (total_existing + opening_qty)
                 )
 
-            realized_this_trade = (fill.price - state.avg_entry_price) * fill.quantity - fill.fee
-            self.realized_pnl += realized_this_trade
-            state.quantity -= fill.quantity
-            self.cash += fill.quantity * fill.price - fill.fee
-            # avg_entry_price is left as-is for any remaining quantity —
-            # selling doesn't change the cost basis of what's left.
+        state.quantity = new_qty
+        if new_qty == 0:
+            state.avg_entry_price = 0.0  # flat — cost basis no longer meaningful
+        self.cash += cash_impact
 
         self.trade_log.append({
             "timestamp": fill.timestamp,
@@ -135,12 +178,18 @@ class Portfolio:
             "quantity": fill.quantity,
             "price": fill.price,
             "fee": fill.fee,
-            "realized_pnl": realized_this_trade,  # 0.0 for buys, real for sells
+            "realized_pnl": realized_this_trade,  # 0.0 unless this fill closed exposure
             "cash_after": self.cash,
         })
 
     def unrealized_pnl(self, current_prices: dict[str, float]) -> float:
-        """Mark-to-market PnL on currently open positions, given current prices."""
+        """
+        Mark-to-market PnL on currently open positions (long or short),
+        given current prices. The formula is direction-agnostic: a
+        negative (short) quantity naturally flips the sign correctly —
+        price rising while short produces negative unrealized PnL, and
+        vice versa, with no special-casing needed.
+        """
         total = 0.0
         for symbol, state in self._positions.items():
             if state.quantity == 0:
@@ -151,11 +200,15 @@ class Portfolio:
         return total
 
     def total_equity(self, current_prices: dict[str, float]) -> float:
-        """Cash plus the current market value of all open positions."""
+        """
+        Cash plus the current market value of all open positions. A
+        short position contributes negatively here (naturally, since
+        its quantity is negative) — you owe those units back.
+        """
         position_value = sum(
             current_prices[symbol] * state.quantity
             for symbol, state in self._positions.items()
-            if state.quantity > 0
+            if state.quantity != 0
         )
         return self.cash + position_value
 
@@ -206,9 +259,15 @@ class Portfolio:
             for symbol, state in self._positions.items()
         )
 
-        sells = [t for t in self.trade_log if t["side"] == "sell"]
-        winning_sells = [t for t in sells if t["realized_pnl"] > 0]
-        win_rate_pct = (len(winning_sells) / len(sells) * 100) if sells else None
+        # A "closing" trade is any fill (buy OR sell) that realized
+        # nonzero PnL — with short-selling, a profitable BUY (covering
+        # a short) is just as much a "win" as a profitable sell closing
+        # a long. Simplification: a trade closing at exactly breakeven
+        # (realized_pnl == 0.0) isn't counted either way — documented,
+        # not expected to matter in practice.
+        closing_trades = [t for t in self.trade_log if t["realized_pnl"] != 0]
+        winning_trades = [t for t in closing_trades if t["realized_pnl"] > 0]
+        win_rate_pct = (len(winning_trades) / len(closing_trades) * 100) if closing_trades else None
 
         return {
             "starting_cash": self.starting_cash,
@@ -219,7 +278,8 @@ class Portfolio:
             "total_return_pct": (final_equity - self.starting_cash) / self.starting_cash * 100,
             "num_trades": len(self.trade_log),
             "num_buys": sum(1 for t in self.trade_log if t["side"] == "buy"),
-            "num_sells": len(sells),
-            "win_rate_pct": win_rate_pct,  # None if no sells have happened yet
+            "num_sells": sum(1 for t in self.trade_log if t["side"] == "sell"),
+            "num_closing_trades": len(closing_trades),
+            "win_rate_pct": win_rate_pct,  # None if no closing trades yet
             "max_drawdown_pct": self.max_drawdown() * 100,
         }
