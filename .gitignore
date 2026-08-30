@@ -24,4 +24,4 @@ check_ada_quotes.py
 check_dupes.py
 check_fee_drag.py
 
-core/risk/kill_switch.py
+
