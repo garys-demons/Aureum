@@ -9,6 +9,7 @@ const links = [
   { to: '/baseline', label: 'Baseline' },
   { to: '/risk', label: 'Risk' },
   { to: '/ai-activity', label: 'AI Activity' },
+  { to: '/comparison', label: 'Comparison' },
 ]
 
 function NavBar() {
