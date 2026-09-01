@@ -39,4 +39,5 @@ export const api = {
     const qs = new URLSearchParams(params).toString()
     return request(`/ai-reasoning/activity${qs ? `?${qs}` : ''}`)
   },
+  getComparison: () => request('/comparison'),
 }
