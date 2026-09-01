@@ -22,8 +22,7 @@ and the strategy_factory lambda below; nothing else needs to change —
 run_strategy_evaluation() already handles any strategy sharing
 BaselineMarketMaker's interface (decide(), record_fill(), .inventory).
 """
-# from core.strategy.baseline_plus_ai import BaselinePlusAI  # uncomment once this exists
-
+from core.strategy.baseline_plus_ai import BaselinePlusAI  
 from research.backtest.run_baseline_evaluation import (
     BASELINE_DATASET,
     run_strategy_evaluation,
@@ -40,20 +39,12 @@ def run_comparison_evaluation() -> dict[str, int]:
     any run's "<run_name>_summary" the same way regardless of which
     strategy produced it.
     """
-    raise NotImplementedError(
-        "Samarth's Baseline+AI strategy variant (core.strategy.baseline_plus_ai, "
-        "or wherever it ends up) doesn't exist yet. Once it does: uncomment the "
-        "import above, and replace this function body with:\n\n"
-        "    return run_strategy_evaluation(\n"
-        "        lambda symbol: BaselinePlusAI(symbol=symbol, base_half_spread=0.001),\n"
-        "        run_name=COMPARISON_RUN_NAME,\n"
-        "        strategy_name='BaselinePlusAI',\n"
-        "        dataset=BASELINE_DATASET,\n"
-        "        extra_metadata={'phase': 8, 'compares_against': 'phase5_baseline', "
-        "'dataset': BASELINE_DATASET},\n"
-        "    )\n\n"
-        "See tests/unit/test_run_comparison_evaluation.py for a working, verified "
-        "demonstration of this exact pattern against a stand-in strategy."
+    return run_strategy_evaluation(
+        lambda symbol: BaselinePlusAI(symbol=symbol, base_half_spread=0.001),
+        run_name=COMPARISON_RUN_NAME,
+        strategy_name="BaselinePlusAI",
+        dataset=BASELINE_DATASET,
+        extra_metadata={"phase": 8, "compares_against": "phase5_baseline", "dataset": BASELINE_DATASET},
     )
 
 
