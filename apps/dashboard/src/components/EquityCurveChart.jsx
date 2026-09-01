@@ -4,11 +4,18 @@
  * the dashboard's dependency list as lean as it's been through every
  * prior phase (still just react/react-dom/react-router-dom).
  *
- * points: array of { timestamp, equity } — same shape
+ * Two usage modes:
+ *   <EquityCurveChart points={curve} />                    — single series (Baseline.jsx, unchanged)
+ *   <EquityCurveChart series={[{name, points, color}, ...]} /> — multiple overlaid series (Phase 8 Comparison.jsx)
+ *
+ * points/series[].points: array of { timestamp, equity } — same shape
  * research.storage saves for a run's equity curve.
  */
-function EquityCurveChart({ points, width = 640, height = 220 }) {
-  if (!points || points.length < 2) {
+function EquityCurveChart({ points, series, width = 640, height = 220 }) {
+  const seriesData = series ?? (points ? [{ name: null, points, color: '#4caf87' }] : [])
+  const hasEnoughData = seriesData.some((s) => s.points && s.points.length >= 2)
+
+  if (!hasEnoughData) {
     return <p className="empty-note">Not enough equity history to draw a chart yet.</p>
   }
 
@@ -16,36 +23,74 @@ function EquityCurveChart({ points, width = 640, height = 220 }) {
   const plotWidth = width - padding.left - padding.right
   const plotHeight = height - padding.top - padding.bottom
 
-  const equities = points.map((p) => p.equity)
-  const minEquity = Math.min(...equities)
-  const maxEquity = Math.max(...equities)
+  // Min/max computed ACROSS all series, so multiple curves share one
+  // consistent scale — otherwise each line would be independently
+  // normalized and visually incomparable, defeating the point of
+  // overlaying them.
+  const allEquities = seriesData.flatMap((s) => (s.points ?? []).map((p) => p.equity))
+  const minEquity = Math.min(...allEquities)
+  const maxEquity = Math.max(...allEquities)
   const range = maxEquity - minEquity || 1 // avoid divide-by-zero on a flat line
 
-  const x = (i) => padding.left + (i / (points.length - 1)) * plotWidth
   const y = (equity) => padding.top + plotHeight - ((equity - minEquity) / range) * plotHeight
 
-  const linePath = points
-    .map((p, i) => `${i === 0 ? 'M' : 'L'} ${x(i).toFixed(1)} ${y(p.equity).toFixed(1)}`)
-    .join(' ')
+  // x is fractional position within EACH series' own point count —
+  // correct whether series have the same number of points or not
+  // (e.g. two runs against the same dataset should match, but this
+  // doesn't assume that).
+  const buildPath = (pts) =>
+    pts
+      .map((p, i) => {
+        const x = padding.left + (i / (pts.length - 1)) * plotWidth
+        return `${i === 0 ? 'M' : 'L'} ${x.toFixed(1)} ${y(p.equity).toFixed(1)}`
+      })
+      .join(' ')
 
-  // A light reference line at the run's starting equity, so it's
-  // visually obvious whether the run is currently up or down overall.
-  const startingEquity = points[0].equity
-  const startingY = y(startingEquity)
+  const isSingleSeries = !series
 
   return (
     <svg viewBox={`0 0 ${width} ${height}`} width="100%" role="img" aria-label="Equity curve">
-      <line
-        x1={padding.left} y1={startingY} x2={width - padding.right} y2={startingY}
-        stroke="var(--panel-border, #2a2a2a)" strokeDasharray="4 4" strokeWidth="1"
-      />
-      <path d={linePath} fill="none" stroke="#4caf87" strokeWidth="2" />
+      {isSingleSeries && seriesData[0]?.points?.length >= 2 && (
+        <line
+          x1={padding.left} y1={y(seriesData[0].points[0].equity)}
+          x2={width - padding.right} y2={y(seriesData[0].points[0].equity)}
+          stroke="var(--panel-border, #2a2a2a)" strokeDasharray="4 4" strokeWidth="1"
+        />
+      )}
+
+      {seriesData.map(
+        (s, idx) =>
+          s.points &&
+          s.points.length >= 2 && (
+            <path
+              key={s.name ?? idx}
+              d={buildPath(s.points)}
+              fill="none"
+              stroke={s.color ?? '#4caf87'}
+              strokeWidth="2"
+            />
+          )
+      )}
+
       <text x={4} y={padding.top + 4} fontSize="10" fill="var(--text-faint, #666)">
         {maxEquity.toFixed(2)}
       </text>
       <text x={4} y={height - padding.bottom} fontSize="10" fill="var(--text-faint, #666)">
         {minEquity.toFixed(2)}
       </text>
+
+      {series && (
+        <g transform={`translate(${padding.left}, ${height - 12})`}>
+          {seriesData.map((s, idx) => (
+            <g key={s.name ?? idx} transform={`translate(${idx * 140}, 0)`}>
+              <rect width="10" height="10" fill={s.color ?? '#4caf87'} />
+              <text x="14" y="9" fontSize="10" fill="var(--text-faint, #666)">
+                {s.name}
+              </text>
+            </g>
+          ))}
+        </g>
+      )}
     </svg>
   )
 }

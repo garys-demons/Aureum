@@ -165,3 +165,11 @@ code {
   background: rgba(150, 150, 150, 0.15);
   color: #999;
 }
+
+/* Phase 8 — Comparison page delta coloring */
+.delta-positive {
+  color: #7ee0a0;
+}
+.delta-negative {
+  color: #e08a87;
+}
