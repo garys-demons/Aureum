@@ -173,3 +173,13 @@ code {
 .delta-negative {
   color: #e08a87;
 }
+
+/* Phase 8 — multi-window comparison sections */
+.window-comparison {
+  margin-bottom: 2.5rem;
+  padding-bottom: 2rem;
+  border-bottom: 1px solid #2a2a2a;
+}
+.window-comparison:last-child {
+  border-bottom: none;
+}

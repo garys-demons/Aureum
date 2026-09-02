@@ -72,11 +72,19 @@ BASELINE_RUN_NAME = "phase5_baseline"
 BASELINE_DATASET = "adausdt_candles_1m_recent_24h"
 STARTING_CASH = 10_000.0
 
-# Matches paper_exchange.py's MAKER_FEE_RATE — the baseline market
-# maker only ever quotes limit orders, so this is the economically
-# correct rate even though candle_fill_model itself doesn't compute
-# fees (it only determines whether/where a fill happened).
-MAKER_FEE_RATE = 0.0005
+# Verified against Binance's real published fee schedule (confirmed
+# via web search, cross-checked across multiple independent sources):
+# regular-tier spot maker fee is 0.1% (0.001), not 0.05%. The original
+# 0.0005 was copied from paper_exchange.py's own explicitly-marked
+# placeholder ("confirm real schedule with team") — never actually
+# confirmed until now. This has been silently understating fees on
+# every evaluation run since Phase 5 (phase5_baseline,
+# phase8_baseline_plus_ai, and all 3-window comparison runs) — all of
+# those persisted results need re-running with this corrected rate
+# before being treated as conclusive. Flagged to Gauri: paper_exchange.py
+# has the identical wrong placeholder, unaffected by this fix since it's
+# a separate file, not exercised by this candle-based backtest path.
+MAKER_FEE_RATE = 0.001
 BACKTEST_MAX_ORDER_SIZE = 100.0
 BACKTEST_MAX_POSITION = 500.0
 
