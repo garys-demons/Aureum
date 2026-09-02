@@ -13,7 +13,7 @@ from dataclasses import dataclass
 from services.market_data.order_book import OrderBook
 
 TAKER_FEE_RATE = 0.001  # 0.1% — placeholder, confirm real schedule with team
-MAKER_FEE_RATE = 0.0005  # 0.05% — placeholder, confirm real schedule with team
+MAKER_FEE_RATE = 0.001  # 0.1% — confirmed against Binance's real spot maker fee schedule (Aryan, Phase 8)
 
 
 @dataclass

@@ -114,8 +114,19 @@ def test_limit_order_none_when_limit_not_met():
     assert fill is None
 
 
-def test_limit_order_uses_maker_fee_not_taker():
+def test_limit_order_uses_maker_fee_not_taker(monkeypatch):
+    """
+    Proves match_limit_order specifically selects MAKER_FEE_RATE, not
+    TAKER_FEE_RATE - independent of whatever the two constants happen
+    to be worth right now (they briefly became numerically equal after
+    the Phase 8 fee correction, which is what prompted this rewrite).
+    Patches TAKER_FEE_RATE to an obviously-different sentinel value so
+    this test can't accidentally pass due to real-world rate coincidence.
+    """
+    monkeypatch.setattr("core.backtest.paper_exchange.TAKER_FEE_RATE", 0.999)
+
     book = _make_book(bids={}, asks={100.0: 5.0})
     fill = match_limit_order(book, side="buy", quantity=1, limit_price=100.0)
+
     assert fill.fee == 1 * 100.0 * MAKER_FEE_RATE
-    assert fill.fee != 1 * 100.0 * TAKER_FEE_RATE
+    assert fill.fee != 1 * 100.0 * 0.999  # would be wildly off if taker rate were used
