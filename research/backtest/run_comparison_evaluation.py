@@ -50,3 +50,46 @@ def run_comparison_evaluation() -> dict[str, int]:
 
 if __name__ == "__main__":
     run_comparison_evaluation()
+WINDOWS = [
+    "adausdt_candles_1m_recent_24h",
+    "adausdt_candles_1m_prior_24h",
+    "adausdt_candles_1m_prior_48h",
+]
+
+
+def run_comparison_across_windows() -> dict[str, dict[str, int]]:
+    """
+    Runs both BaselineMarketMaker and BaselinePlusAI across all 3
+    pinned windows, not just one - a single window's trade count
+    (2-4 trades) is too thin to support any real conclusion, same
+    lesson Phase 5's spread-tuning investigation already taught.
+
+    Formalizes what was previously a local-only, unmerged script -
+    agreed with Gauri and Hansika as the real Phase 8 methodology
+    before this was written.
+    """
+    from core.strategy.baseline_market_maker import BaselineMarketMaker
+
+    results = {}
+    for window in WINDOWS:
+        suffix = window.replace("adausdt_candles_1m_", "")
+
+        results[f"baseline_{suffix}"] = run_strategy_evaluation(
+            lambda symbol: BaselineMarketMaker(symbol=symbol, base_half_spread=0.001),
+            run_name=f"phase8_compare_baseline_{suffix}",
+            strategy_name="BaselineMarketMaker",
+            dataset=window,
+            extra_metadata={"phase": 8, "window": suffix},
+        )
+        results[f"ai_{suffix}"] = run_strategy_evaluation(
+            lambda symbol: BaselinePlusAI(symbol=symbol, base_half_spread=0.001),
+            run_name=f"phase8_compare_ai_{suffix}",
+            strategy_name="BaselinePlusAI",
+            dataset=window,
+            extra_metadata={"phase": 8, "window": suffix},
+        )
+    return results
+
+
+if __name__ == "__main__":
+    run_comparison_across_windows()
