@@ -34,7 +34,7 @@ view_full_function.py
 check_regime_on_real_data.py
 measure_volatility_distribution.py
 check_retrieval_on_real_data.py
-core/risk/kill_switch.pyrun_full_comparison.py 
+run_full_comparison.py
 check_comparison_source.py
 check_feature_signatures.py
 check_flat_rsi.py
@@ -45,5 +45,4 @@ fix_comparison_evaluation.py
 fix_dead_duplicate.py
 print_comparison.py
 print_full_comparison.py
-run_full_comparison.py
 view_full_comparison_file.py
