@@ -82,10 +82,14 @@ class FakeAlwaysPausedVariant:
 
 def test_refactored_run_baseline_evaluation_matches_known_good_values():
     """
-    Regression test: these exact numbers were captured by running the
-    ORIGINAL, pre-refactor run_baseline_evaluation() against this same
-    deterministic dataset, in a separate, untouched copy of the code,
-    and compared byte-for-byte before this refactor was accepted.
+    Regression test — updated after the Phase 8 fee correction
+    (MAKER_FEE_RATE 0.0005 -> 0.001, verified against Binance's real
+    published spot maker fee schedule). These exact numbers were
+    hand-verified against the actual trade log at the corrected rate —
+    e.g. the second trade (a sell closing the first buy at 0.180,
+    selling at 0.182): realized_pnl = (0.182 - 0.180) * 100 - 0.0182
+    fee = 0.1818, confirmed directly against the persisted trade log,
+    not just accepted from the code's own output.
     """
     save_dataset("adausdt_candles_1m_recent_24h", make_deterministic_candles(20),
                  category="raw", source="test")
@@ -98,8 +102,8 @@ def test_refactored_run_baseline_evaluation_matches_known_good_values():
     assert row["num_trades"] == 40
     assert row["num_buys"] == 20
     assert row["num_sells"] == 20
-    assert row["realized_pnl"] == pytest.approx(3.8185, abs=1e-4)
-    assert row["ending_cash"] == pytest.approx(10003.639, abs=1e-3)
+    assert row["realized_pnl"] == pytest.approx(3.637, abs=1e-3)
+    assert row["ending_cash"] == pytest.approx(10003.278, abs=1e-3)
     assert row["win_rate_pct"] == 100.0
     assert row["max_drawdown_pct"] == 0.0
 

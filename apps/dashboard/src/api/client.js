@@ -35,9 +35,13 @@ export const api = {
     const qs = new URLSearchParams(params).toString()
     return request(`/risk/decisions${qs ? `?${qs}` : ''}`)
   },
-  getAiActivity: (params = {}) => {
+    getAiActivity: (params = {}) => {
     const qs = new URLSearchParams(params).toString()
     return request(`/ai-reasoning/activity${qs ? `?${qs}` : ''}`)
   },
-  getComparison: () => request('/comparison'),
+  // Replaced single-window getComparison() — a single window isn't
+  // statistically meaningful on its own (Phase 8 methodology, agreed
+  // with Gauri/Hansika), so the dashboard now always shows all 3
+  // pinned windows together.
+  getComparisonWindows: () => request('/comparison/windows'),
 }
